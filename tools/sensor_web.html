@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IR Sensor Monitor</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e2e0d9;
+    --accent: #2f6fd6; --rec: #d23c3c; --ok: #2e8b57;
+    --c0: #2f6fd6; --c1: #d9822b; --c2: #2e9d6b; --c3: #9b4fd1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --panel: #201f1d; --ink: #ecebe6; --muted: #9d9b94; --line: #34332f;
+      --accent: #6c9cf0; --rec: #f06a6a; --ok: #5cc28d;
+      --c0: #6c9cf0; --c1: #f0a45c; --c2: #5cc28d; --c3: #c08cf0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  .status { font-size: 13px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.on { background: var(--ok); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 640px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+  .tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .tile .name { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .tile .val { font-size: 28px; font-variant-numeric: tabular-nums; font-weight: 600; margin: 4px 0 8px; }
+  .tile .val small { font-size: 14px; font-weight: 400; color: var(--muted); }
+  .meter { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .meter div { height: 100%; width: 0; }
+  canvas { width: 100%; height: 260px; display: block; }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text] { flex: 1; min-width: 180px; padding: 8px 10px; border-radius: 6px;
+                     border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
+  button { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--ink); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.stop { background: var(--rec); border-color: var(--rec); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .chips { margin-top: 10px; }
+  .chips button { font-size: 13px; padding: 4px 10px; border-radius: 14px; }
+  .recinfo { margin-top: 10px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .recinfo.live { color: var(--rec); }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  #track { height: 300px; }
+  .linestate { font-size: 18px; font-weight: 600; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .calgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; font-size: 13px; }
+  @media (max-width: 640px) { .calgrid { grid-template-columns: repeat(2, 1fr); } }
+  .calgrid div { border: 1px solid var(--line); border-radius: 6px; padding: 8px; color: var(--muted); }
+  .calgrid b { color: var(--ink); font-weight: 600; }
+  .calgrid label { display: flex; gap: 6px; align-items: center; margin-top: 4px; cursor: pointer; }
+  ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted);
+       font-family: ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>IR Sensor Monitor</h1>
+    <span class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></span>
+  </header>
+
+  <section class="panel"><div class="tiles" id="tiles"></div></section>
+
+  <section class="panel">
+    <h2>Line position</h2>
+    <canvas id="track"></canvas>
+    <div class="linestate" id="linestate">Waiting for data…</div>
+    <div class="legend">Top: the sensor strip, VOUT1 on the left as in the PCB layout. Each circle is shaded by how
+      dark the surface under it is; the band is the estimated line. Below: the last 5 seconds of line position, newest
+      at the top.</div>
+    <div class="calgrid" id="calgrid"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="sweep">Sweep calibrate (5 s)</button>
+      <button id="calreset">Reset calibration</button>
+      <span class="legend" id="calmsg" style="margin:0">Click, then slide the strip back and forth across the line.</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <canvas id="chart"></canvas>
+    <div class="legend">Last 15 seconds, 0–3300 mV. Shaded bands mark labels during a recording.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Recording</h2>
+    <div class="row">
+      <input type="text" id="label" placeholder="Label, e.g. white or tape under VOUT1">
+      <button class="primary" id="start">Start recording</button>
+      <button class="stop" id="stop" disabled>Stop</button>
+    </div>
+    <div class="row chips" id="chips"></div>
+    <div class="recinfo" id="recinfo">Not recording. Pick or type a label, then start. While recording,
+      clicking a label switches it, so one file can hold several steps.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Saved recordings (recordings/ folder)</h2>
+    <ul id="files"><li>None yet</li></ul>
+  </section>
+</main>
+
+<script>
+const WINDOW_S = 15, MAX_MV = 3300;
+const PRESETS = ["white", "black", "tape under VOUT1", "tape under VOUT2",
+                 "tape under VOUT3", "tape under VOUT4", "unplug test",
+                 "air (nothing below)", "D2 covered", "D1 covered"];
+let channels = {}, keys = [], history = [], recording = false;
+
+const $ = id => document.getElementById(id);
+const color = i => getComputedStyle(document.documentElement).getPropertyValue(`--c${i}`).trim();
+
+// ---- Line tracking -------------------------------------------------------
+// Defaults from the 2026-10-16 tape recording. VOUT1 (G3) reads stuck near
+// 3.1 V, so it is ignored until that channel is fixed.
+const DEFAULT_CAL = { G3: { white: 3130, black: 2700 }, G4: { white: 1150, black: 430 },
+                      G5: { white: 1150, black: 450 }, G0: { white: 1000, black: 420 } };
+const DEFAULT_IGNORE = { G3: true };
+const TRAIL_S = 5, SWEEP_MS = 5000, MIN_SPAN_MV = 100;
+const DETECT = 0.5;   // a channel this dark (0-1) or more means the line is found
+const FLOOR = 0.15;   // darkness below this counts as white, to keep noise out of the estimate
+
+function loadStored(key, fallback) {
+  try { const v = JSON.parse(localStorage.getItem(key)); return v || fallback; } catch { return fallback; }
+}
+function store(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+let cal = loadStored("ir-cal", structuredClone(DEFAULT_CAL));
+let ignore = loadStored("ir-ignore", { ...DEFAULT_IGNORE });
+let darkness = {}, linePos = null, trail = [], sweep = null;
+
+// 0 = white, 1 = black, from each channel's own calibration.
+function darknessOf(k, mv) {
+  const { white, black } = cal[k];
+  return Math.min(1, Math.max(0, (white - mv) / (white - black)));
+}
+
+function updateLine(values) {
+  if (sweep) {
+    for (const k of keys) {
+      sweep.min[k] = Math.min(sweep.min[k], values[k]);
+      sweep.max[k] = Math.max(sweep.max[k], values[k]);
+    }
+  }
+  const active = keys.filter(k => !ignore[k]);
+  let sum = 0, weighted = 0, maxD = 0;
+  keys.forEach((k, i) => {
+    darkness[k] = darknessOf(k, values[k]);
+    if (ignore[k]) return;
+    const d = darkness[k] > FLOOR ? darkness[k] : 0;
+    sum += d; weighted += d * i; maxD = Math.max(maxD, darkness[k]);
+  });
+  const allBlack = active.length > 1 && active.every(k => darkness[k] >= DETECT);
+  linePos = maxD >= DETECT && sum > 0 ? weighted / sum : null;   // 0 = VOUT1 ... 3 = VOUT4
+  trail.push({ t: performance.now() / 1000, pos: linePos });
+  while (trail.length && performance.now() / 1000 - trail[0].t > TRAIL_S) trail.shift();
+
+  const el = $("linestate");
+  if (!active.length) el.textContent = "All channels ignored";
+  else if (allBlack) el.textContent = "All active sensors on black (crossing or stop marker?)";
+  else if (linePos === null) el.textContent = "Line lost: no sensor sees black";
+  else {
+    const off = linePos - 1.5;   // sensor spacings from the strip's center
+    const where = Math.abs(off) < 0.25 ? "centered" : `${Math.abs(off).toFixed(2)} spacings ${off < 0 ? "left (toward VOUT1)" : "right (toward VOUT4)"}`;
+    el.textContent = `Line at ${linePos.toFixed(2)} · ${where}`;
+  }
+  keys.forEach(k => { const e = $(`d-${k}`); if (e) e.textContent = `${Math.round(darkness[k] * 100)}%`; });
+}
+
+function renderCalGrid() {
+  $("calgrid").innerHTML = keys.map(k => `
+    <div><b>${channels[k]}</b><br>
+      dark <b id="d-${k}">–</b> · white ${cal[k].white} · black ${cal[k].black}
+      <label><input type="checkbox" data-ch="${k}" ${ignore[k] ? "" : "checked"}> use in position</label>
+    </div>`).join("");
+}
+
+function drawTrack() {
+  const c = $("track"), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  if (!keys.length) return;
+  const css = getComputedStyle(document.documentElement);
+  const ink = css.getPropertyValue("--ink").trim(), line = css.getPropertyValue("--line").trim();
+  const muted = css.getPropertyValue("--muted").trim(), bg = css.getPropertyValue("--bg").trim();
+
+  const margin = Math.min(70, w * 0.1);
+  const spacing = (w - 2 * margin) / (keys.length - 1);
+  const sx = i => margin + i * spacing;
+  const stripY = 62, stripH = 64, roadTop = stripY + stripH / 2 + 14, roadH = h - roadTop - 4;
+
+  // Road: surface background and center guide
+  g.fillStyle = bg; g.fillRect(0, roadTop, w, roadH);
+  g.setLineDash([4, 6]); g.strokeStyle = line; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(w / 2, 0); g.lineTo(w / 2, h); g.stroke(); g.setLineDash([]);
+
+  // Trail: newest at the top of the road, older entries further down
+  const now = performance.now() / 1000;
+  g.strokeStyle = ink; g.lineWidth = Math.max(10, spacing * 0.35); g.lineCap = "round"; g.globalAlpha = 0.85;
+  g.beginPath();
+  let drawing = false;
+  for (let i = trail.length - 1; i >= 0; i--) {
+    const p = trail[i];
+    if (p.pos === null) { drawing = false; continue; }
+    const x = sx(p.pos), y = roadTop + (now - p.t) / TRAIL_S * roadH;
+    drawing ? g.lineTo(x, y) : g.moveTo(x, y);
+    drawing = true;
+  }
+  g.stroke(); g.globalAlpha = 1; g.lineCap = "butt";
+
+  // Sensor strip (PCB) and the estimated line under it
+  g.fillStyle = line; g.beginPath(); g.roundRect(margin * 0.4, stripY - stripH / 2, w - margin * 0.8, stripH, 8); g.fill();
+  if (linePos !== null) {
+    g.fillStyle = ink; g.globalAlpha = 0.25;
+    g.fillRect(sx(linePos) - spacing * 0.3, stripY - stripH / 2, spacing * 0.6, stripH);
+    g.globalAlpha = 1;
+  }
+  const r = Math.min(22, spacing * 0.28);
+  g.font = "12px -apple-system, sans-serif"; g.textAlign = "center";
+  keys.forEach((k, i) => {
+    const d = darkness[k] ?? 0, shade = Math.round(255 * (1 - d));
+    g.beginPath(); g.arc(sx(i), stripY, r, 0, Math.PI * 2);
+    g.fillStyle = `rgb(${shade},${shade},${shade})`; g.fill();
+    g.lineWidth = 2; g.strokeStyle = color(i); g.stroke();
+    if (ignore[k]) {
+      g.strokeStyle = muted; g.beginPath();
+      g.moveTo(sx(i) - r, stripY - r); g.lineTo(sx(i) + r, stripY + r); g.stroke();
+    }
+    g.fillStyle = muted;
+    g.fillText(channels[k].split(" ")[0] + (ignore[k] ? " (off)" : ""), sx(i), stripY - stripH / 2 - 8);
+  });
+  if (linePos !== null) {
+    g.fillStyle = ink;
+    g.beginPath(); g.moveTo(sx(linePos), stripY + stripH / 2 + 2);
+    g.lineTo(sx(linePos) - 7, stripY + stripH / 2 + 12); g.lineTo(sx(linePos) + 7, stripY + stripH / 2 + 12);
+    g.fill();
+  }
+  g.textAlign = "start";
+}
+
+$("calgrid").addEventListener("change", e => {
+  const k = e.target.dataset.ch;
+  if (!k) return;
+  ignore[k] = !e.target.checked;
+  store("ir-ignore", ignore);
+});
+
+$("sweep").onclick = () => {
+  sweep = { min: {}, max: {} };
+  keys.forEach(k => { sweep.min[k] = Infinity; sweep.max[k] = -Infinity; });
+  $("sweep").disabled = true;
+  $("calmsg").textContent = "Calibrating… slide the strip across the line so every sensor sees white and black.";
+  setTimeout(() => {
+    const skipped = [];
+    for (const k of keys) {
+      if (sweep.max[k] - sweep.min[k] >= MIN_SPAN_MV) cal[k] = { white: sweep.max[k], black: sweep.min[k] };
+      else skipped.push(channels[k].split(" ")[0]);
+    }
+    sweep = null;
+    store("ir-cal", cal);
+    renderCalGrid();
+    $("sweep").disabled = false;
+    $("calmsg").textContent = skipped.length
+      ? `Calibrated. Kept old values for ${skipped.join(", ")}: they changed by less than ${MIN_SPAN_MV} mV.`
+      : "Calibrated all channels.";
+  }, SWEEP_MS);
+};
+
+$("calreset").onclick = () => {
+  cal = structuredClone(DEFAULT_CAL); ignore = { ...DEFAULT_IGNORE };
+  store("ir-cal", cal); store("ir-ignore", ignore);
+  renderCalGrid();
+  $("calmsg").textContent = "Reset to the defaults from the tape recording.";
+};
+
+function renderFiles(files) {
+  $("files").innerHTML = files.length ? files.map(f => `<li>${f}</li>`).join("") : "<li>None yet</li>";
+}
+
+function setConnected(on) {
+  $("dot").classList.toggle("on", on);
+  $("status").textContent = on ? "Board connected" : "Board disconnected, reconnecting…";
+}
+
+async function init() {
+  const cfg = await (await fetch("/config")).json();
+  channels = cfg.channels; keys = Object.keys(channels);
+  renderFiles(cfg.recordings);
+  $("tiles").innerHTML = keys.map((k, i) => `
+    <div class="tile">
+      <div class="name"><span class="swatch" style="background:${color(i)}"></span>${channels[k]}</div>
+      <div class="val" id="v-${k}">–<small> mV</small></div>
+      <div class="meter"><div id="m-${k}" style="background:${color(i)}"></div></div>
+    </div>`).join("");
+  for (const k of keys) cal[k] ??= { white: 1150, black: 430 };
+  renderCalGrid();
+  $("chips").innerHTML = PRESETS.map(p => `<button data-label="${p}">${p}</button>`).join("");
+
+  const es = new EventSource("/events");
+  es.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "status") return setConnected(msg.connected);
+    setConnected(true);
+    const now = performance.now() / 1000;
+    history.push({ t: now, v: msg.values, label: msg.rec ? msg.rec.label : null });
+    while (history.length && now - history[0].t > WINDOW_S) history.shift();
+    for (const k of keys) {
+      $(`v-${k}`).innerHTML = `${msg.values[k]}<small> mV</small>`;
+      $(`m-${k}`).style.width = `${Math.min(100, msg.values[k] / MAX_MV * 100)}%`;
+    }
+    updateLine(msg.values);
+    if (msg.rec) {
+      $("recinfo").textContent = `● Recording "${msg.rec.label}": ${msg.rec.t.toFixed(1)} s, ${msg.rec.rows} rows`;
+    }
+  };
+  es.onerror = () => setConnected(false);
+  requestAnimationFrame(draw);
+}
+
+function draw() {
+  const c = $("chart"), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const pad = { l: 44, r: 8, t: 8, b: 20 };
+  const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
+  const now = performance.now() / 1000;
+  const x = t => pad.l + (1 - (now - t) / WINDOW_S) * pw;
+  const y = mv => pad.t + (1 - mv / MAX_MV) * ph;
+
+  // Label bands
+  g.font = "11px -apple-system, sans-serif";
+  let start = null;
+  for (let i = 0; i <= history.length; i++) {
+    const p = history[i], prev = history[i - 1];
+    if (prev && prev.label && (!p || p.label !== prev.label)) {
+      const x0 = Math.max(pad.l, x(start.t)), x1 = x(prev.t);
+      g.fillStyle = css.getPropertyValue("--line"); g.globalAlpha = 0.5;
+      g.fillRect(x0, pad.t, x1 - x0, ph); g.globalAlpha = 1;
+      g.fillStyle = css.getPropertyValue("--muted"); g.fillText(prev.label, x0 + 4, pad.t + 12);
+    }
+    if (p && p.label && (!prev || prev.label !== p.label)) start = p;
+  }
+
+  // Grid
+  g.strokeStyle = css.getPropertyValue("--line"); g.fillStyle = css.getPropertyValue("--muted");
+  g.lineWidth = 1;
+  for (let mv = 0; mv <= MAX_MV; mv += 1000) {
+    g.beginPath(); g.moveTo(pad.l, y(mv)); g.lineTo(w - pad.r, y(mv)); g.stroke();
+    g.fillText(`${mv}`, 4, y(mv) + 4);
+  }
+
+  // Lines
+  keys.forEach((k, i) => {
+    g.strokeStyle = color(i); g.lineWidth = 2; g.beginPath();
+    history.forEach((p, j) => j ? g.lineTo(x(p.t), y(p.v[k])) : g.moveTo(x(p.t), y(p.v[k])));
+    g.stroke();
+  });
+  drawTrack();
+  requestAnimationFrame(draw);
+}
+
+$("chips").addEventListener("click", async e => {
+  const label = e.target.dataset.label;
+  if (!label) return;
+  $("label").value = label;
+  if (recording) await fetch(`/label?label=${encodeURIComponent(label)}`);
+});
+
+$("start").onclick = async () => {
+  const label = $("label").value.trim() || "recording";
+  const r = await (await fetch(`/start?label=${encodeURIComponent(label)}`)).json();
+  recording = true;
+  $("start").disabled = true; $("stop").disabled = false;
+  $("recinfo").classList.add("live");
+  $("recinfo").textContent = `● Recording to ${r.file}`;
+};
+
+$("stop").onclick = async () => {
+  const r = await (await fetch("/stop")).json();
+  recording = false;
+  $("start").disabled = false; $("stop").disabled = true;
+  $("recinfo").classList.remove("live");
+  $("recinfo").textContent = r.stopped
+    ? `Saved ${r.stopped.file} (${r.stopped.rows} rows). Tell Claude to analyze it.`
+    : "Not recording.";
+  renderFiles(r.recordings);
+};
+
+init();
+</script>
+</body>
+</html>
