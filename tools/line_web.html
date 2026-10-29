@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Line Motor</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e2e0d9;
+    --accent: #2f6fd6; --rec: #d23c3c; --ok: #2e8b57; --rev: #d9822b;
+    --c0: #2f6fd6; --c1: #d9822b; --c2: #2e9d6b; --c3: #9b4fd1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --panel: #201f1d; --ink: #ecebe6; --muted: #9d9b94; --line: #34332f;
+      --accent: #6c9cf0; --rec: #f06a6a; --ok: #5cc28d; --rev: #f0a45c;
+      --c0: #6c9cf0; --c1: #f0a45c; --c2: #5cc28d; --c3: #c08cf0;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .status { font-size: 13px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.on { background: var(--ok); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .readout { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .readout .val { font-size: 26px; font-weight: 600; }
+  .mode { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+          padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+  .mode.forward { color: var(--accent); border-color: var(--accent); }
+  .mode.reverse { color: var(--rev); border-color: var(--rev); }
+  .mode.brake { color: var(--rec); border-color: var(--rec); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row + .row { margin-top: 10px; }
+  button { padding: 9px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--ink); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.on { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
+  button.stop { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  input[type=range] { flex: 1; min-width: 200px; accent-color: var(--accent); }
+  input[type=number] { width: 80px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
+                       background: var(--bg); color: var(--ink); font: inherit; font-variant-numeric: tabular-nums; }
+  .sliderval { min-width: 90px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 640px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+  .tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .tile.black { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+  .tile.off { opacity: .5; }
+  .tile .name { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .tile .val { font-size: 28px; font-variant-numeric: tabular-nums; font-weight: 600; margin: 4px 0 2px; }
+  .tile .val small { font-size: 14px; font-weight: 400; color: var(--muted); }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .04em; padding: 1px 8px;
+           border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.black { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .meter { position: relative; height: 8px; background: var(--line); border-radius: 4px; margin: 10px 0; }
+  .meter .fill { height: 100%; width: 0; border-radius: 4px; }
+  .meter .th { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
+  .tile label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .tile .cal { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; min-height: 1.45em; }
+  .tile .cal.warn { color: var(--rec); }
+  .oledwrap { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .oled { width: 256px; height: 128px; background: #000; border: 6px solid #2a2a2a; border-radius: 6px;
+          color: #9fd8ff; font-family: ui-monospace, Menlo, monospace; position: relative; flex: none; }
+  .oled .word { position: absolute; top: 0; left: 0; right: 0; height: 96px; display: flex; align-items: center;
+                justify-content: center; font-size: 40px; font-weight: 700; letter-spacing: .04em; }
+  .oled .foot { position: absolute; left: 6px; bottom: 6px; font-size: 13px; }
+  .oled.off { opacity: .35; }
+  .oledstatus { font-weight: 600; }
+  .val.tone { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 220px; }
+  .oledstatus.bad { color: var(--rec); }
+  .oledstatus.good { color: var(--ok); }
+  .states { display: grid; gap: 6px; margin-top: 14px; }
+  .staterow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px;
+              border: 1px solid var(--line); border-radius: 8px; }
+  .staterow.current { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .staterow .sname { min-width: 210px; display: flex; flex-direction: column; }
+  .staterow .sname small { color: var(--muted); font-size: 12px; }
+  button.lbl.active { background: var(--ink); border-color: var(--ink); color: var(--bg); font-weight: 600; }
+  button.lbl#lwhite.active { background: var(--panel); color: var(--ink); box-shadow: inset 0 0 0 2px var(--ink); }
+  .learnstate { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  canvas { width: 100%; height: 220px; display: block; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  #log { margin: 0; height: 140px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
+         white-space: pre-wrap; }
+  #log .out { color: var(--accent); }
+  kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Line Motor</h1>
+    <span class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></span>
+  </header>
+
+  <section class="panel">
+    <div class="readout">
+      <span class="val" id="verdict">—</span>
+      <span class="mode" id="mode">coast</span>
+      <span class="status" id="duty"></span>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="auto">Auto: off</button>
+      <button class="stop" id="stop">Stop</button>
+    </div>
+    <div class="states" id="states"></div>
+    <div class="hint">VOUT3 is the centre sensor, VOUT4 the outer one. Their pattern picks a state, and the motor runs
+      at that state's speed (0 = stop). A sensor flips black/white only 50&nbsp;mV past its threshold. Auto is always
+      off after a reset.<br><kbd>A</kbd> toggle auto · <kbd>Space</kbd> stop</div>
+  </section>
+
+  <section class="panel">
+    <h2>OLED display</h2>
+    <div class="oledwrap">
+      <div class="oled" id="oled"><div class="word" id="oledword">—</div><div class="foot" id="oledfoot"></div></div>
+      <div>
+        <div class="oledstatus" id="oledstatus">Waiting for data…</div>
+        <div class="hint">128×64 SSD1306 at I2C 0x3C · SDA GPIO21 · SCL GPIO22 · VCC 3V3 · GND. Mirrors the
+          screen: BLACK when VOUT3 or VOUT4 sees black. The ESP32 checks for the display every 2&nbsp;s.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Piezo</h2>
+    <div class="row">
+      <span class="val tone" id="tone">—</span>
+      <button id="sound">Sound: on</button>
+    </div>
+    <div class="row">
+      <label class="status">White <input type="number" id="hzwhite" min="20" max="20000" step="50"> Hz</label>
+      <label class="status">Black <input type="number" id="hzblack" min="20" max="20000" step="50"> Hz</label>
+    </div>
+    <div class="hint">PAM8904 piezo driver: SIG on GPIO23, VIN 5V, GND, VO+/VO− to the piezo (either way round).
+      2&nbsp;kHz over white, 4&nbsp;kHz over black, following the same WHITE/BLACK as the OLED. <kbd>M</kbd> mute</div>
+  </section>
+
+  <section class="panel">
+    <h2>Sensors</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Learn thresholds</h2>
+    <div class="row">
+      <button class="lbl" id="lwhite" data-l="white">White <kbd>W</kbd></button>
+      <button class="lbl" id="lblack" data-l="black">Black <kbd>B</kbd></button>
+      <button class="lbl" id="lpause" data-l="">Pause <kbd>P</kbd></button>
+      <span class="learnstate" id="learnstate">Paused</span>
+    </div>
+    <div class="row">
+      <button class="primary" id="apply" disabled>Apply learned thresholds</button>
+      <button id="learnreset">Start over</button>
+    </div>
+    <div class="hint" id="calmsg">Move the array over your board and press W while it is over white, B while the
+      line is under it, P to pause. Each sensor's threshold is fitted between its white readings and the dark
+      readings it gave while labelled black, so sweep the line under every sensor. A sensor that never went clearly
+      darker than its white keeps its current threshold.</div>
+  </section>
+
+  <section class="panel">
+    <canvas id="chart"></canvas>
+    <div class="hint">Last 10 seconds, 0–3300 mV. Dashed lines are the thresholds.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Serial log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const WINDOW_S = 10, MAX_MV = 3300;
+const color = i => getComputedStyle(document.documentElement).getPropertyValue(`--c${i}`).trim();
+const get = path => fetch(path).then(r => r.json()).catch(() => null);
+
+let connected = false, cfg = null, last = null, history = [];
+const emptySamples = () => ({ white: [[], [], [], []], black: [[], [], [], []] });
+let samples = emptySamples(), learned = [null, null, null, null], learnDirty = false, lastLearn = {};
+
+// ---- Sensor tiles --------------------------------------------------------
+function buildTiles(names) {
+  $("tiles").innerHTML = "";
+  names.forEach((name, i) => {
+    const t = document.createElement("div");
+    t.className = "tile";
+    t.id = `tile${i}`;
+    t.innerHTML = `
+      <div class="name"><span class="swatch" style="background:${color(i)}"></span><span></span></div>
+      <div class="val"><span class="mv">—</span> <small>mV</small></div>
+      <span class="badge">—</span>
+      <div class="meter"><div class="fill" style="background:${color(i)}"></div><div class="th"></div></div>
+      <label>Threshold <input type="number" min="0" max="3300" step="10"> mV</label>
+      <label><input type="checkbox" checked> Use in rule</label>
+      <div class="cal"></div>`;
+    t.querySelector(".name span:last-child").textContent = name;
+    const [num] = t.querySelectorAll("input[type=number]");
+    const box = t.querySelector("input[type=checkbox]");
+    num.onchange = () => get(`/threshold?ch=${i + 1}&mv=${Math.round(+num.value)}`);
+    box.onchange = () => get(`/enable?ch=${i + 1}&on=${box.checked ? 1 : 0}`);
+    $("tiles").append(t);
+  });
+}
+
+function showConfig(c) {
+  cfg = c;
+  $("auto").textContent = c.auto ? "Auto: ON" : "Auto: off";
+  $("auto").className = c.auto ? "on" : "";
+  $("sound").textContent = c.sound ? "Sound: on" : "Sound: muted";
+  if (document.activeElement !== $("hzwhite")) $("hzwhite").value = c.tones[0];
+  if (document.activeElement !== $("hzblack")) $("hzblack").value = c.tones[1];
+  c.speeds.forEach((v, s) => {
+    const row = $(`state${s}`);
+    if (!row) return;
+    const slider = row.querySelector("input");
+    if (document.activeElement !== slider) slider.value = v;
+    showStateSpeed(s);
+  });
+  c.thresholds.forEach((th, i) => {
+    const t = $(`tile${i}`);
+    if (!t) return;
+    const num = t.querySelector("input[type=number]");
+    if (document.activeElement !== num) num.value = th;
+    t.querySelector("input[type=checkbox]").checked = c.enabled[i];
+    t.querySelector(".th").style.left = `${th / MAX_MV * 100}%`;
+    t.classList.toggle("off", !c.enabled[i]);
+  });
+}
+
+function showData(d) {
+  last = d;
+  const now = performance.now() / 1000;
+  history.push({ t: now, mv: d.mv });
+  while (history.length && history[0].t < now - WINDOW_S) history.shift();
+  d.mv.forEach((mv, i) => {
+    const t = $(`tile${i}`);
+    if (!t) return;
+    t.querySelector(".mv").textContent = mv;
+    const b = t.querySelector(".badge");
+    b.textContent = d.black[i] ? "BLACK" : "white";
+    b.className = `badge${d.black[i] ? " black" : ""}`;
+    t.classList.toggle("black", d.black[i] && (!cfg || cfg.enabled[i]));
+    t.querySelector(".fill").style.width = `${Math.min(mv, MAX_MV) / MAX_MV * 100}%`;
+  });
+  $("verdict").textContent = `${STATE_INFO[d.state]?.title ?? d.state}${d.auto ? "" : " (auto off)"}`;
+  $("oledword").textContent = d.state === "lost" ? "WHITE" : "BLACK";
+  $("oledfoot").textContent = `state: ${d.state}`;
+  $("oled").classList.toggle("off", !d.oled);
+  $("oledstatus").textContent = d.oled ? "OLED connected: the real screen shows the same"
+                                       : "OLED not detected on I2C: check VCC, GND, SDA→21, SCL→22";
+  $("oledstatus").className = `oledstatus ${d.oled ? "good" : "bad"}`;
+  $("tone").textContent = d.tone ? `♪ ${d.tone} Hz · ${d.state === "lost" ? "WHITE" : "BLACK"}` : "Silent (muted)";
+  document.querySelectorAll(".staterow").forEach(r => r.classList.toggle("current", r.dataset.state === d.state));
+  $("mode").textContent = d.mode;
+  $("mode").className = `mode ${d.mode}`;
+  $("duty").textContent = d.duty ? `PWM duty ${Math.abs(d.duty)} (${Math.round(Math.abs(d.duty) / 2.55)}%)` : "";
+  if (d.auto !== cfg?.auto && cfg) showConfig({ ...cfg, auto: d.auto });
+  if (d.label) {
+    d.mv.forEach((mv, i) => samples[d.label][i].push(mv));
+    learnDirty = true;
+  }
+}
+
+// ---- Auto + motor --------------------------------------------------------
+const pct = v => `${Math.round(v / 2.55)}%`;
+const STATE_INFO = {
+  lost:   { title: "Lost", pattern: "VOUT3 white · VOUT4 white" },
+  centre: { title: "Centre → straight", pattern: "VOUT3 BLACK · VOUT4 white" },
+  drift:  { title: "Drift → gentle turn", pattern: "VOUT3 BLACK · VOUT4 BLACK" },
+  turn:   { title: "Turn → hard turn", pattern: "VOUT3 white · VOUT4 BLACK" },
+};
+
+function buildStates(names) {
+  $("states").innerHTML = "";
+  names.forEach((name, s) => {
+    const row = document.createElement("div");
+    row.className = "staterow";
+    row.id = `state${s}`;
+    row.dataset.state = name;
+    row.innerHTML = `<span class="sname"><b></b><small></small></span>
+      <input type="range" min="0" max="255" value="0"><span class="sliderval"></span>`;
+    row.querySelector("b").textContent = STATE_INFO[name]?.title ?? name;
+    row.querySelector("small").textContent = STATE_INFO[name]?.pattern ?? "";
+    const slider = row.querySelector("input");
+    slider.addEventListener("input", () => showStateSpeed(s));
+    slider.addEventListener("change", () => get(`/statespeed?s=${s}&v=${slider.value}`));
+    $("states").append(row);
+    showStateSpeed(s);
+  });
+}
+
+function showStateSpeed(s) {
+  const row = $(`state${s}`);
+  const v = +row.querySelector("input").value;
+  row.querySelector(".sliderval").textContent = v ? `${v} (${pct(v)})` : "stop";
+}
+
+const toggleAuto = () => get(`/auto?on=${cfg?.auto ? 0 : 1}`);
+$("auto").onclick = toggleAuto;
+const toggleSound = () => get(`/sound?on=${cfg?.sound ? 0 : 1}`);
+$("sound").onclick = toggleSound;
+const setTones = () => get(`/tones?white=${Math.round(+$("hzwhite").value)}&black=${Math.round(+$("hzblack").value)}`);
+$("hzwhite").onchange = setTones;
+$("hzblack").onchange = setTones;
+$("stop").onclick = () => get("/stop");
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.key !== " ") return;
+  const k = e.key.toLowerCase();
+  if (e.key === " ") { e.preventDefault(); get("/stop"); }
+  else if (k === "a") toggleAuto();
+  else if (k === "m") toggleSound();
+  else if (k === "w") get("/label?l=white");
+  else if (k === "b") get("/label?l=black");
+  else if (k === "p") get("/label?l=");
+});
+
+// ---- Learning ------------------------------------------------------------
+// Per sensor: white readings come from every white-labelled sample. While labelled
+// black the line is under only some sensors at a time, so a sensor's black readings
+// are just its samples that were clearly darker than its own white. The threshold
+// sits midway between the dark end of white (5th percentile) and the light end of
+// black (95th percentile), so stray readings on either side are tolerated.
+const MIN_SAMPLES = 10, MIN_GAP_MV = 100;
+
+function pctile(values, p) {
+  const s = [...values].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(p / 100 * s.length))];
+}
+
+function fit(white, black) {
+  if (white.length < MIN_SAMPLES) return { msg: "needs white samples" };
+  const wLo = pctile(white, 5), wHi = pctile(white, 95);
+  const w = `white ${wLo}–${wHi}`;
+  if (black.length < MIN_SAMPLES) return { msg: `${w} · needs black samples` };
+  const darkest = pctile(black, 10);
+  if (wLo - darkest < MIN_GAP_MV) return { msg: `${w} · never clearly darker while black`, warn: true };
+  const dark = black.filter(v => v < (darkest + wLo) / 2);
+  const bLo = pctile(dark, 5), bHi = pctile(dark, 95), gap = wLo - bHi;
+  if (gap < MIN_GAP_MV) return { msg: `${w} · black ${bLo}–${bHi} · overlap, not separable`, warn: true };
+  const th = Math.round((bHi + wLo) / 2);
+  return { th, msg: `${w} · black ${bLo}–${bHi} · → ${th} mV (±${Math.floor(gap / 2)})` };
+}
+
+function showLearned() {
+  learnDirty = false;
+  for (let i = 0; i < 4; i++) {
+    const r = fit(samples.white[i], samples.black[i]);
+    learned[i] = r.th ?? null;
+    const el = $(`tile${i}`)?.querySelector(".cal");
+    if (!el) continue;
+    el.textContent = samples.white[i].length || samples.black[i].length ? r.msg : "";
+    el.classList.toggle("warn", !!r.warn);
+  }
+  $("apply").disabled = !connected || !learned.some(v => v != null);
+}
+setInterval(() => { if (learnDirty) { showLearned(); showLearn(lastLearn); } }, 250);
+
+function showLearn(m) {
+  document.querySelectorAll("button.lbl").forEach(b => b.classList.toggle("active", b.dataset.l === (m.label || "")));
+  const counts = `${samples.white[0].length} white · ${samples.black[0].length} black samples`;
+  $("learnstate").textContent = m.label ? `Labelling ${m.label.toUpperCase()} · ${counts}`
+                                        : `Paused · ${counts}${m.file ? ` · saving to recordings/${m.file}` : ""}`;
+}
+
+document.querySelectorAll("button.lbl").forEach(b => b.onclick = () => get(`/label?l=${b.dataset.l}`));
+$("learnreset").onclick = () => {
+  samples = emptySamples();
+  showLearned();
+  get("/learnreset");
+};
+$("apply").onclick = async () => {
+  const set = [];
+  for (let i = 0; i < 4; i++) {
+    if (learned[i] == null) continue;
+    await get(`/threshold?ch=${i + 1}&mv=${learned[i]}`);
+    set.push(`VOUT${i + 1} ${learned[i]}`);
+  }
+  $("calmsg").textContent = `Thresholds set: ${set.join(", ")} mV. Sensors without a fit kept theirs.`;
+};
+
+// ---- Chart ---------------------------------------------------------------
+function draw() {
+  const c = $("chart"), dpr = devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const pad = 36, y = mv => h - 4 - (h - 8) * mv / MAX_MV, x = t => pad + (w - pad) * (1 - (now - t) / WINDOW_S);
+  const now = performance.now() / 1000;
+  g.font = "11px -apple-system, sans-serif";
+  g.fillStyle = css.getPropertyValue("--muted");
+  g.strokeStyle = css.getPropertyValue("--line");
+  g.lineWidth = 1;
+  for (let mv = 0; mv <= 3000; mv += 1000) {
+    g.beginPath(); g.moveTo(pad, y(mv)); g.lineTo(w, y(mv)); g.stroke();
+    g.fillText(mv, 2, y(mv) + 4);
+  }
+  for (let i = 0; i < 4; i++) {
+    g.strokeStyle = color(i);
+    if (cfg && cfg.enabled[i]) {
+      g.setLineDash([4, 4]);
+      g.beginPath(); g.moveTo(pad, y(cfg.thresholds[i])); g.lineTo(w, y(cfg.thresholds[i])); g.stroke();
+      g.setLineDash([]);
+    }
+    g.lineWidth = 2;
+    g.beginPath();
+    history.forEach((p, j) => j ? g.lineTo(x(p.t), y(p.mv[i])) : g.moveTo(x(p.t), y(p.mv[i])));
+    g.stroke();
+    g.lineWidth = 1;
+  }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ---- Connection + log ----------------------------------------------------
+function showStatus(on) {
+  connected = on;
+  $("dot").classList.toggle("on", on);
+  $("status").textContent = on ? "ESP32 connected" : "ESP32 disconnected — waiting for port…";
+  document.querySelectorAll("button, input").forEach(el => el.disabled = !on);
+  if (on) $("apply").disabled = !learned.some(v => v != null);
+}
+
+function log(m) {
+  const el = $("log");
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+  const line = document.createElement("div");
+  line.className = m.dir;
+  line.textContent = `${new Date().toLocaleTimeString()} ${m.dir === "out" ? "→" : "←"} ${m.text}`;
+  el.append(line);
+  while (el.childElementCount > 300) el.firstChild.remove();
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+get("/config").then(c => {
+  if (!c) return;
+  buildTiles(c.sensors);
+  buildStates(c.states);
+  showStatus(c.connected);
+  if (c.config) showConfig(c.config);
+  const es = new EventSource("/events");
+  es.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === "status") showStatus(m.connected);
+    else if (m.type === "config") showConfig(m);
+    else if (m.type === "data") showData(m);
+    else if (m.type === "log") log(m);
+    else if (m.type === "learn") showLearn(lastLearn = m);
+  };
+  es.onerror = () => showStatus(false);
+});
+</script>
+</body>
+</html>

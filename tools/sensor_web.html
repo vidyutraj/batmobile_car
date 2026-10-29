@@ -120,11 +120,11 @@ const $ = id => document.getElementById(id);
 const color = i => getComputedStyle(document.documentElement).getPropertyValue(`--c${i}`).trim();
 
 // ---- Line tracking -------------------------------------------------------
-// Defaults from the 2026-10-16 tape recording. VOUT1 (G3) reads stuck near
-// 3.1 V, so it is ignored until that channel is fixed.
-const DEFAULT_CAL = { G3: { white: 3130, black: 2700 }, G4: { white: 1150, black: 430 },
-                      G5: { white: 1150, black: 450 }, G0: { white: 1000, black: 420 } };
-const DEFAULT_IGNORE = { G3: true };
+// Defaults from the typical levels in the 2026-10-16 tape recording; sweep
+// calibrate to replace them.
+const DEFAULT_CAL = { G2: { white: 1150, black: 430 }, G3: { white: 1150, black: 430 },
+                      G4: { white: 1150, black: 450 }, G5: { white: 1000, black: 420 } };
+const DEFAULT_IGNORE = {};
 const TRAIL_S = 5, SWEEP_MS = 5000, MIN_SPAN_MV = 100;
 const DETECT = 0.5;   // a channel this dark (0-1) or more means the line is found
 const FLOOR = 0.15;   // darkness below this counts as white, to keep noise out of the estimate

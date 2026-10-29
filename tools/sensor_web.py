@@ -26,8 +26,8 @@ ROOT = Path(__file__).resolve().parent.parent
 RECORDINGS = ROOT / "recordings"
 PAGE = Path(__file__).resolve().parent / "sensor_web.html"
 
-# GPIO -> display name, in VOUT order. Mapping from the 2026-10-16 tape test.
-CHANNELS = {"G3": "VOUT1 (GPIO3)", "G4": "VOUT2 (GPIO4)", "G5": "VOUT3 (GPIO5)", "G0": "VOUT4 (GPIO0)"}
+# GPIO -> display name, in VOUT order. Wiring as of 2026-10-29.
+CHANNELS = {"G2": "VOUT1 (GPIO2)", "G3": "VOUT2 (GPIO3)", "G4": "VOUT3 (GPIO4)", "G5": "VOUT4 (GPIO5)"}
 FIELD = re.compile(r"(G\d+)=(\d+)")
 
 

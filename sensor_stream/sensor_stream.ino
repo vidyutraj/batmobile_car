@@ -1,13 +1,12 @@
 // Streams the four sensor channels for tools/sensor_web.py at ~20 Hz as
-//   G0=1408 G3=3145 G4=1860 G5=2280
+//   G2=1408 G3=3145 G4=1860 G5=2280
 // (GPIO number = averaged millivolts), at 115200 baud.
 //
-// Target: ESP32-C6. VOUT4 is on GPIO0; VOUT1-VOUT3 are on GPIO3-GPIO5 in an
-// order still to be confirmed, so channels are labelled by GPIO here and
-// mapped to VOUT names in the web tool.
+// Target: ESP32-C6. VOUT1-VOUT4 are on GPIO2-GPIO5 (wiring as of 2026-10-29).
+// Channels are labelled by GPIO here and mapped to VOUT names in the web tool.
 
 const uint8_t NUM_PINS = 4;
-const uint8_t PINS[NUM_PINS] = {0, 3, 4, 5};
+const uint8_t PINS[NUM_PINS] = {2, 3, 4, 5};
 
 const uint8_t SAMPLES = 32;
 const uint16_t PRINT_INTERVAL_MS = 50;
