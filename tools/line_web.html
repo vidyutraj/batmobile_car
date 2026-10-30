@@ -83,13 +83,15 @@
   .staterow .sname { min-width: 210px; display: flex; flex-direction: column; }
   .staterow .sname small { color: var(--muted); font-size: 12px; }
   button.lbl.active { background: var(--ink); border-color: var(--ink); color: var(--bg); font-weight: 600; }
-  button.lbl#lwhite.active { background: var(--panel); color: var(--ink); box-shadow: inset 0 0 0 2px var(--ink); }
+  button.lbl#lwhite.active, button.lbl#f3w.active, button.lbl#f4w.active { background: var(--panel); color: var(--ink); box-shadow: inset 0 0 0 2px var(--ink); }
   .learnstate { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
   canvas { width: 100%; height: 220px; display: block; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
   #log { margin: 0; height: 140px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
          white-space: pre-wrap; }
   #log .out { color: var(--accent); }
+  body.manual .sensing, body:not(.manual) .manualonly { display: none; }
+  .row .sname { min-width: 140px; }
   kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
 </style>
 </head>
@@ -114,6 +116,26 @@
     <div class="hint">VOUT3 is the centre sensor, VOUT4 the outer one. Their pattern picks a state, and the motor runs
       at that state's speed (0 = stop). A sensor flips black/white only 50&nbsp;mV past its threshold. Auto is always
       off after a reset.<br><kbd>A</kbd> toggle auto · <kbd>Space</kbd> stop</div>
+  </section>
+
+  <section class="panel">
+    <h2>Input</h2>
+    <div class="row">
+      <button id="manual">Input: manual</button>
+    </div>
+    <div class="row manualonly">
+      <span class="sname"><b>VOUT3</b> (centre)</span>
+      <button class="lbl" id="f3w">White</button><button class="lbl" id="f3b">Black</button>
+      <span class="hint"><kbd>3</kbd> flip</span>
+    </div>
+    <div class="row manualonly">
+      <span class="sname"><b>VOUT4</b> (outer)</span>
+      <button class="lbl" id="f4w">White</button><button class="lbl" id="f4b">Black</button>
+      <span class="hint"><kbd>4</kbd> flip</span>
+    </div>
+    <div class="hint">Manual: each sensor's white/black is set here instead of read from the board, and the state,
+      motor, OLED and piezo react exactly as they would to the sensors. <kbd>I</kbd> switches between manual and
+      sensors.</div>
   </section>
 
   <section class="panel">
@@ -142,12 +164,12 @@
       2&nbsp;kHz over white, 4&nbsp;kHz over black, following the same WHITE/BLACK as the OLED. <kbd>M</kbd> mute</div>
   </section>
 
-  <section class="panel">
+  <section class="panel sensing">
     <h2>Sensors</h2>
     <div class="tiles" id="tiles"></div>
   </section>
 
-  <section class="panel">
+  <section class="panel sensing">
     <h2>Learn thresholds</h2>
     <div class="row">
       <button class="lbl" id="lwhite" data-l="white">White <kbd>W</kbd></button>
@@ -165,7 +187,7 @@
       darker than its white keeps its current threshold.</div>
   </section>
 
-  <section class="panel">
+  <section class="panel sensing">
     <canvas id="chart"></canvas>
     <div class="hint">Last 10 seconds, 0–3300 mV. Dashed lines are the thresholds.</div>
   </section>
@@ -215,6 +237,12 @@ function showConfig(c) {
   $("auto").textContent = c.auto ? "Auto: ON" : "Auto: off";
   $("auto").className = c.auto ? "on" : "";
   $("sound").textContent = c.sound ? "Sound: on" : "Sound: muted";
+  document.body.classList.toggle("manual", c.manual);
+  $("manual").textContent = c.manual ? "Input: manual" : "Input: sensors";
+  [3, 4].forEach(n => {
+    $(`f${n}w`).classList.toggle("active", !c.forced[n - 1]);
+    $(`f${n}b`).classList.toggle("active", c.forced[n - 1]);
+  });
   if (document.activeElement !== $("hzwhite")) $("hzwhite").value = c.tones[0];
   if (document.activeElement !== $("hzblack")) $("hzblack").value = c.tones[1];
   c.speeds.forEach((v, s) => {
@@ -311,12 +339,22 @@ const setTones = () => get(`/tones?white=${Math.round(+$("hzwhite").value)}&blac
 $("hzwhite").onchange = setTones;
 $("hzblack").onchange = setTones;
 $("stop").onclick = () => get("/stop");
+const toggleManual = () => get(`/manual?on=${cfg?.manual ? 0 : 1}`);
+$("manual").onclick = toggleManual;
+const force = (n, black) => get(`/force?ch=${n}&black=${black ? 1 : 0}`);
+const flipForced = n => cfg && force(n, !cfg.forced[n - 1]);
+[3, 4].forEach(n => {
+  $(`f${n}w`).onclick = () => force(n, false);
+  $(`f${n}b`).onclick = () => force(n, true);
+});
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" && e.key !== " ") return;
   const k = e.key.toLowerCase();
   if (e.key === " ") { e.preventDefault(); get("/stop"); }
   else if (k === "a") toggleAuto();
   else if (k === "m") toggleSound();
+  else if (k === "i") toggleManual();
+  else if (k === "3" || k === "4") flipForced(+k);
   else if (k === "w") get("/label?l=white");
   else if (k === "b") get("/label?l=black");
   else if (k === "p") get("/label?l=");

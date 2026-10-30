@@ -3,7 +3,8 @@
 Talks to the line_motor sketch over serial and serves a control page at
 http://127.0.0.1:8767: live sensor readings, per-sensor thresholds, the line
 state (lost / centre / drift / turn), the motor speed used for each state, and
-a mirror of what the OLED shows, and the speaker tone.
+a mirror of what the OLED shows, and the speaker tone. In manual input each
+sensor's black/white is set from the page instead of read from the board.
 
 Thresholds, enables and state speeds set here are re-sent if the ESP32 resets,
 but auto mode never is: it always comes back off.
@@ -39,7 +40,7 @@ SENSORS = ["VOUT1 (GPIO2)", "VOUT2 (GPIO3)", "VOUT3 (GPIO4)", "VOUT4 (GPIO5)"]
 STATES = ["lost", "centre", "drift", "turn"]
 DATA_LINE = re.compile(r"^D (\d+) (\d+) (\d+) (\d+) black=([01]{4}) state=(\w+) speed=(-?\d+) duty=(-?\d+) "
                        r"mode=(\w+) auto=([01]) oled=([01]) tone=(\d+)")
-CFG_LINE = re.compile(r"^CFG auto=([01]) sp=(\d+),(\d+),(\d+),(\d+) th=(\d+),(\d+),(\d+),(\d+) en=([01]{4}) snd=([01]) hz=(\d+),(\d+)")
+CFG_LINE = re.compile(r"^CFG auto=([01]) sp=(\d+),(\d+),(\d+),(\d+) th=(\d+),(\d+),(\d+),(\d+) en=([01]{4}) snd=([01]) hz=(\d+),(\d+) man=([01]) frc=([01]{4})")
 
 
 class State:
@@ -154,7 +155,8 @@ def handle_line(text):
         g = m.groups()
         state.config = {"type": "config", "auto": g[0] == "1", "speeds": [int(v) for v in g[1:5]],
                         "thresholds": [int(v) for v in g[5:9]], "enabled": [b == "1" for b in g[9]],
-                        "sound": g[10] == "1", "tones": [int(g[11]), int(g[12])]}
+                        "sound": g[10] == "1", "tones": [int(g[11]), int(g[12])],
+                        "manual": g[13] == "1", "forced": [b == "1" for b in g[14]]}
         state.broadcast(state.config)
     elif text.startswith("READY"):
         # The ESP32 (re)booted with default settings.
@@ -243,6 +245,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": state.setting("F", f"F {w} {b}")})
         elif path == "/sound":
             self.send_json({"ok": state.setting("U", f"U {int_arg(q, 'on', 0, 1)}")})
+        elif path == "/manual":
+            self.send_json({"ok": state.setting("S", f"S {int_arg(q, 'on', 0, 1)}")})
+        elif path == "/force":
+            ch = int_arg(q, "ch", 1, 4)
+            self.send_json({"ok": state.setting(f"K{ch}", f"K {ch} {int_arg(q, 'black', 0, 1)}")})
         elif path == "/brake":
             self.send_json({"ok": state.send("B")})
         elif path == "/label":

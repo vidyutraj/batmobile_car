@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OLED Cue</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e2e0d9;
+    --accent: #2f6fd6; --rec: #d23c3c; --ok: #2e8b57;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614; --panel: #201f1d; --ink: #ecebe6; --muted: #9d9b94; --line: #34332f;
+      --accent: #6c9cf0; --rec: #f06a6a; --ok: #5cc28d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .status { font-size: 13px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.on { background: var(--ok); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .cues { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .cue { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .cue.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .cue button { padding: 18px 14px; border-radius: 8px; font: inherit; font-size: 20px; font-weight: 600; line-height: 1;
+                cursor: pointer; letter-spacing: .04em; }
+  #cuewhite button { background: #fff; color: #1d1d1b; border: 2px solid #1d1d1b; }
+  #cueblack button { background: #1d1d1b; color: #fff; border: 2px solid #1d1d1b; }
+  .cue label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+  .cue input { padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg);
+               color: var(--ink); font: inherit; width: 100%; }
+  .screenwrap { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  canvas { width: 256px; height: 128px; background: #000; border: 6px solid #2a2a2a; border-radius: 6px;
+           box-sizing: content-box; flex: none; }
+  canvas.off { opacity: .35; }
+  .oledstatus { font-weight: 600; }
+  .oledstatus.bad { color: var(--rec); }
+  .oledstatus.good { color: var(--ok); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row + .row { margin-top: 10px; }
+  .tone { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 220px; }
+  button { padding: 9px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--ink); font: inherit; cursor: pointer; }
+  button.on { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
+  input[type=number] { width: 90px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line);
+                       background: var(--bg); color: var(--ink); font: inherit; font-variant-numeric: tabular-nums; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  #log { margin: 0; height: 120px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted);
+         white-space: pre-wrap; }
+  #log .out { color: var(--accent); }
+  kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  @media (max-width: 520px) { .cues { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>OLED Cue</h1>
+    <span class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></span>
+  </header>
+
+  <section class="panel">
+    <div class="cues">
+      <div class="cue" id="cuewhite">
+        <button data-c="white">WHITE</button>
+        <label>Message for white <input id="msgwhite" maxlength="40" placeholder="WHITE"></label>
+      </div>
+      <div class="cue" id="cueblack">
+        <button data-c="black">BLACK</button>
+        <label>Message for black <input id="msgblack" maxlength="40" placeholder="BLACK"></label>
+      </div>
+    </div>
+    <div class="hint"><kbd>W</kbd> white · <kbd>B</kbd> black · <kbd>Space</kbd> flip. Messages are sent when you
+      press Enter or leave the box; up to 40 characters, wrapped and sized to fit the screen.</div>
+  </section>
+
+  <section class="panel">
+    <h2>OLED</h2>
+    <div class="screenwrap">
+      <canvas id="screen" width="256" height="128"></canvas>
+      <div>
+        <div class="oledstatus" id="oledstatus">Waiting for the board…</div>
+        <div class="hint">128×64 SSD1306 at 0x3C · SDA/SCL on GPIO20/21 (as wired now) or 21/20: the sketch
+          tries both · VCC 3V3 · GND. Rechecked every 2&nbsp;s.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Piezo</h2>
+    <div class="row">
+      <span class="tone" id="tone">—</span>
+      <button id="sound">Sound: on</button>
+    </div>
+    <div class="row">
+      <label class="status">White <input type="number" id="hzwhite" min="20" max="20000" step="50"> Hz</label>
+      <label class="status">Black <input type="number" id="hzblack" min="20" max="20000" step="50"> Hz</label>
+    </div>
+    <div class="hint">PAM8904 · SIG GPIO22 · VIN/GND from the supply · VO+/VO− to the piezo. Piezos are loudest
+      around 2–4&nbsp;kHz. <kbd>M</kbd> mute.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Serial log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const W = 128, H = 64, MAX_MSG = 40;
+let board = null;
+
+const get = path => fetch(path).then(r => r.json()).catch(() => null);
+const cue = c => get(`/cue?c=${c}`);
+document.querySelectorAll(".cue button").forEach(b => { b.onclick = () => cue(b.dataset.c); });
+
+["white", "black"].forEach(which => {
+  const input = $(`msg${which}`);
+  const send = () => {
+    const text = input.value.trim().replace(/\s+/g, " ").slice(0, MAX_MSG);
+    if (board && text === board[which]) return;
+    get(`/message?for=${which}&text=${encodeURIComponent(text)}`);
+  };
+  input.addEventListener("change", send);
+  input.addEventListener("keydown", e => { if (e.key === "Enter") { send(); input.blur(); } });
+});
+
+$("sound").onclick = () => get(`/sound?on=${board?.sound ? 0 : 1}`);
+const setTones = () => get(`/tones?white=${Math.round(+$("hzwhite").value)}&black=${Math.round(+$("hzblack").value)}`);
+$("hzwhite").onchange = setTones;
+$("hzblack").onchange = setTones;
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  const k = e.key.toLowerCase();
+  if (k === "m") get(`/sound?on=${board?.sound ? 0 : 1}`);
+  else if (k === "w") cue("white");
+  else if (k === "b") cue("black");
+  else if (e.key === " ") { e.preventDefault(); cue(board?.cue === "black" ? "white" : "black"); }
+});
+
+// Same layout as oled_cue's draw(): greedy word wrap, largest size that fits.
+function wrap(text, width, maxLines) {
+  const out = [];
+  let cur = "";
+  for (let word of text.split(" ").filter(Boolean)) {
+    while (word.length > width) {
+      if (cur) { out.push(cur); cur = ""; }
+      out.push(word.slice(0, width));
+      word = word.slice(width);
+    }
+    if (!cur) cur = word;
+    else if (cur.length + 1 + word.length <= width) cur += " " + word;
+    else { out.push(cur); cur = word; }
+  }
+  if (cur) out.push(cur);
+  return out.length <= maxLines ? out : null;
+}
+
+function layout(msg) {
+  for (let size = 3; size >= 1; size--) {
+    const lines = wrap(msg, Math.floor(W / (6 * size)), Math.floor(H / (8 * size)));
+    if (lines) return { size, lines };
+  }
+  const width = Math.floor(W / 6);
+  return { size: 1, lines: (wrap(msg, width, 99) || []).slice(0, H / 8) };
+}
+
+function drawScreen() {
+  const ctx = $("screen").getContext("2d");
+  ctx.clearRect(0, 0, 256, 128);
+  if (!board?.cue) return;
+  const msg = board[board.cue] ?? "";
+  const { size, lines } = layout(msg);
+  const s = 2;   // canvas pixels per OLED pixel
+  const cw = 6 * size * s, ch = 8 * size * s;
+  ctx.fillStyle = "#9fd8ff";
+  ctx.font = `${7 * size * s}px ui-monospace, Menlo, monospace`;
+  ctx.textBaseline = "top";
+  const top = (H * s - lines.length * ch) / 2;
+  lines.forEach((line, l) => {
+    const x0 = (W * s - line.length * cw) / 2;
+    [...line].forEach((chr, i) => ctx.fillText(chr, x0 + i * cw, top + l * ch + size * s * 0.5, cw));
+  });
+}
+
+function show(b) {
+  board = b;
+  $("dot").className = `dot${b.connected ? " on" : ""}`;
+  $("status").textContent = b.connected ? `Connected · ${b.port ?? ""}` : "Board not connected: waiting for USB";
+  ["white", "black"].forEach(which => {
+    $(`cue${which}`).classList.toggle("active", b.cue === which);
+    if (b[which] != null && document.activeElement !== $(`msg${which}`)) $(`msg${which}`).value = b[which];
+  });
+  $("screen").classList.toggle("off", !b.oled);
+  if (b.sound != null) {
+    $("sound").textContent = b.sound ? "Sound: on" : "Sound: muted";
+    $("sound").className = b.sound ? "on" : "";
+  }
+  if (b.tones) {
+    if (document.activeElement !== $("hzwhite")) $("hzwhite").value = b.tones[0];
+    if (document.activeElement !== $("hzblack")) $("hzblack").value = b.tones[1];
+  }
+  $("tone").textContent = !b.connected ? "—" : b.tone ? `♪ ${b.tone} Hz · ${b.cue.toUpperCase()}` : "Silent (muted)";
+  const ok = b.connected && b.oled;
+  $("oledstatus").textContent = !b.connected ? "Board not connected"
+    : ok ? `OLED connected (SDA GPIO${b.sda} · SCL GPIO${b.scl}): the real screen shows the same`
+    : "OLED not detected: check VCC, GND, SDA→20, SCL→21";
+  $("oledstatus").className = `oledstatus ${ok ? "good" : "bad"}`;
+  drawScreen();
+}
+
+function log(m) {
+  const el = $("log");
+  const line = document.createElement("div");
+  if (m.dir === "out") line.className = "out";
+  line.textContent = `${m.dir === "out" ? "→" : "←"} ${m.text}`;
+  el.append(line);
+  while (el.childNodes.length > 300) el.firstChild.remove();
+  el.scrollTop = el.scrollHeight;
+}
+
+const events = new EventSource("/events");
+events.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.type === "state") show(m);
+  else if (m.type === "log") log(m);
+};
+events.onerror = () => { $("dot").className = "dot"; $("status").textContent = "Server stopped"; };
+</script>
+</body>
+</html>

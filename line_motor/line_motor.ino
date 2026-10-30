@@ -20,6 +20,11 @@
 // A disabled sensor always counts as white. Auto mode is off at boot, so the
 // motor never moves until it is enabled.
 //
+// Manual input: while the sensor board is away (2026-10-30), each sensor's
+// black/white is set by K commands instead of its reading. Everything downstream
+// (line state, motor, OLED, piezo) works as with the sensors. Readings are still
+// taken and streamed; S 0 goes back to them. Manual is on at boot (DEFAULT_MANUAL).
+//
 // Each sensor's black/white flips only once its reading is HYSTERESIS_MV past
 // the threshold, so a reading sitting on the threshold does not chatter.
 //
@@ -33,12 +38,15 @@
 //   B            brake (turns auto off)
 //   U <0|1>      speaker off / on
 //   F <w> <b>    tone in Hz over white / over black, 20..20000
+//   S <0|1>      black/white from the sensor readings / from K (manual)
+//   K <i> <0|1>  in manual, sensor i (1-4) sees white / black
 //   ?            report the config
 // Streamed every 50 ms:
 //   D <mv1> <mv2> <mv3> <mv4> black=<bits VOUT1..4> state=<s> speed=<n> duty=<n> mode=<m> auto=<0|1>
 //     oled=<0|1> tone=<hz>  (oled: 1 when the display answers on I2C; tone: 0 when silent)
 // Answered after each command:
 //   CFG auto=<0|1> sp=<lost>,<centre>,<drift>,<turn> th=<mv1>,<mv2>,<mv3>,<mv4> en=<bits VOUT1..4> snd=<0|1> hz=<white>,<black>
+//     man=<0|1> frc=<bits VOUT1..4>
 
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -66,6 +74,7 @@ const int MIN_DUTY = 168;
 const int DEFAULT_THRESHOLD_MV[NUM_SENSORS] = {650, 800, 1500, 1650};
 const bool DEFAULT_ENABLED[NUM_SENSORS] = {false, false, true, true};
 const int HYSTERESIS_MV = 50;
+const bool DEFAULT_MANUAL = true;   // sensor board unplugged for now
 const uint16_t PRINT_INTERVAL_MS = 50;
 
 const int SCREEN_W = 128;
@@ -91,6 +100,8 @@ int thresholdMv[NUM_SENSORS];
 bool enabled[NUM_SENSORS];
 uint32_t readingMv[NUM_SENSORS];
 bool black[NUM_SENSORS];
+bool manual = DEFAULT_MANUAL;
+bool forcedBlack[NUM_SENSORS];
 bool autoMode = false;
 int stateSpeed[NUM_STATES];
 LineState lineState = LOST;
@@ -107,6 +118,7 @@ bool oledDirty = true;
 uint32_t lastOledProbe = 0;
 bool shownBlack = false;
 LineState shownState = LOST;
+bool shownManual = false;
 
 bool soundOn = true;
 uint32_t whiteToneHz = DEFAULT_WHITE_TONE_HZ;
@@ -171,7 +183,10 @@ void reportConfig() {
                 stateSpeed[LOST], stateSpeed[CENTRE], stateSpeed[DRIFT], stateSpeed[TURN],
                 thresholdMv[0], thresholdMv[1], thresholdMv[2], thresholdMv[3]);
   for (int i = 0; i < NUM_SENSORS; i++) Serial.print(enabled[i] ? '1' : '0');
-  Serial.printf(" snd=%d hz=%lu,%lu\n", soundOn, (unsigned long)whiteToneHz, (unsigned long)blackToneHz);
+  Serial.printf(" snd=%d hz=%lu,%lu man=%d frc=", soundOn, (unsigned long)whiteToneHz, (unsigned long)blackToneHz,
+                manual);
+  for (int i = 0; i < NUM_SENSORS; i++) Serial.print(forcedBlack[i] ? '1' : '0');
+  Serial.println();
 }
 
 void reportData() {
@@ -198,7 +213,8 @@ void probeOled() {
 // of I2C, which would otherwise stall the sensor loop.
 void updateOled() {
   bool lineBlack = lineState != LOST;
-  if (!oledOk || (!oledDirty && lineBlack == shownBlack && lineState == shownState)) return;
+  if (!oledOk || (!oledDirty && lineBlack == shownBlack && lineState == shownState && manual == shownManual)) return;
+  shownManual = manual;
   shownBlack = lineBlack;
   shownState = lineState;
   oledDirty = false;
@@ -213,7 +229,7 @@ void updateOled() {
   display.print(word);
   display.setTextSize(1);
   display.setCursor(0, SCREEN_H - 8);
-  display.printf("state: %s", STATE_NAMES[lineState]);
+  display.printf("state: %s%s", STATE_NAMES[lineState], manual ? " (manual)" : "");
   display.display();
 }
 
@@ -244,11 +260,14 @@ void handleLine(String cmd) {
   } else if (c == 'V' && space > 0) {
     int s = args.substring(0, space).toInt();
     if (s >= 0 && s < NUM_STATES) stateSpeed[s] = constrain(args.substring(space + 1).toInt(), 0, 255);
-  } else if ((c == 'T' || c == 'E') && space > 0 && sensorArg(args.substring(0, space)) >= 0) {
+  } else if ((c == 'T' || c == 'E' || c == 'K') && space > 0 && sensorArg(args.substring(0, space)) >= 0) {
     int i = sensorArg(args.substring(0, space));
     int v = args.substring(space + 1).toInt();
     if (c == 'T') thresholdMv[i] = constrain(v, 0, 3300);
-    else enabled[i] = v != 0;
+    else if (c == 'E') enabled[i] = v != 0;
+    else forcedBlack[i] = v != 0;
+  } else if (c == 'S') {
+    manual = args.toInt() != 0;
   } else if (c == 'M') {
     autoMode = false;
     setMotor(args.toInt());
@@ -277,6 +296,7 @@ void setup() {
     thresholdMv[i] = DEFAULT_THRESHOLD_MV[i];
     enabled[i] = DEFAULT_ENABLED[i];
     black[i] = false;
+    forcedBlack[i] = false;
   }
   for (int s = 0; s < NUM_STATES; s++) stateSpeed[s] = DEFAULT_STATE_SPEED[s];
 
@@ -314,7 +334,8 @@ void loop() {
 
   for (int i = 0; i < NUM_SENSORS; i++) {
     readingMv[i] = readAveragedMillivolts(SENSOR_PINS[i]);
-    updateBlack(i);
+    if (manual) black[i] = forcedBlack[i];
+    else updateBlack(i);
   }
   lineState = currentState();
 
