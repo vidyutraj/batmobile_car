@@ -99,9 +99,9 @@ const float HARD_TURN_INNER = -0.50f;   // an outer sensor sees the line: inner 
 const float POS_MAX          = 1500.0f;
  
 // --- Calibration sweep ---
-const int      CAL_SPEED       = 130;       // pivot speed while sweeping
-const uint32_t CAL_SWEEP_MS    = 550;       // left for this long, then right for 2x this long
-const int      CENTER_SPEED    = 100;       // pivot speed while re-centering on the line
+const int      CAL_SPEED       = 150;       // pivot speed while sweeping (130 didn't turn the wheels)
+const uint32_t CAL_SWEEP_MS    = 450;       // left for this long, then right for 2x this long
+const int      CENTER_SPEED    = 110;       // pivot speed while re-centering on the line
 const float    CENTER_TOL      = 350.0f;    // |position| below this counts as centered
  
 // --- Motors ---
@@ -114,7 +114,7 @@ const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, t
 const int      MOTOR_TEST_SPEED = 160;
  
 // --- Line following (live-tunable over serial) ---
-volatile int   baseSpeed = 110;             // straight-line speed, 0-255
+volatile int   baseSpeed = 120;             // straight-line speed, 0-255
 volatile float kp = 0.10f;                  // speed units per position unit
 volatile float ki = 0.0f;
 volatile float kd = 0.004f;                 // speed units per (position unit / second)
@@ -124,7 +124,7 @@ const float    CURVE_SLOWDOWN = 0.35f;      // base speed drops up to 35 % at fu
 const uint32_t RAMP_MS        = 400;        // soft start from 0 to base speed
  
 // --- Lost line / safety ---
-const int      SEARCH_SPEED       = 110;
+const int      SEARCH_SPEED       = 130;
 const float    SEARCH_CENTER_BAND = 400.0f; // last seen near center -> creep straight instead of pivoting
 const uint32_t LOST_TIMEOUT_MS    = 1500;
 const uint32_t ALL_BLACK_STOP_MS  = 300;
