@@ -8,8 +8,9 @@
  *      -> Place the car with the line between the two middle sensors before/at power-on.
  *   3. Auto-calibration: pivots left, then right, across the line (~1 s) to learn the
  *      black and white reading of EACH sensor, then pivots back until centered.
- *   4. Follows the line with simple threshold logic: each sensor is black or white (threshold halfway between
- *      its calibrated levels), and a table picks straight / gentle turn / sharp turn.
+ *   4. Follows the line by comparing how dark the two middle sensors are: about equal = straight, otherwise
+ *      turn toward the darker one in proportion; S4 black = sharp right. Black/white thresholds (halfway
+ *      between each sensor's calibrated levels) decide whether the line is seen at all.
  *   5. Line lost  -> pivots toward where the line was last seen; stops after LOST_TIMEOUT_MS.
  *      All black  -> (crossing line or the car was picked up) drives straight; stops
  *                    if it lasts longer than ALL_BLACK_STOP_MS.
@@ -93,9 +94,15 @@ const float SENSOR_WEIGHT[NUM_SENSORS] = {-1500, -500, 500, 1500};
 // BLACK_ON, and WHITE again once it falls below BLACK_OFF. The gap is hysteresis so it doesn't flicker at the edge.
 const float BLACK_ON  = 0.60f;
 const float BLACK_OFF = 0.40f;
-// Inner-wheel speed as a fraction of the base speed (outer wheel runs at base).
-const float SOFT_TURN_INNER = 0.30f;    // a middle sensor sees the line: gentle turn
-const float HARD_TURN_INNER = -0.50f;   // an outer sensor sees the line: inner wheel reverses, sharp turn
+// Steering from the two middle sensors: err = darkness(S3) - darkness(S2), -1 (line under S2, left) .. +1 (line
+// under S3, right). Inside +-STEER_DEADBAND it drives straight; beyond that it turns toward the darker sensor,
+// in proportion: one wheel speeds up and the other slows by STEER_GAIN * err * base.
+const float STEER_DEADBAND  = 0.20f;
+const float STEER_GAIN      = 0.80f;
+const float HARD_TURN_INNER = -0.50f;   // S4 (right outer) sees the line: inner wheel reverses, sharp turn
+// 1 flips every steering decision. Use it if the car turns AWAY from the line (sensor order or left/right
+// motors mirrored relative to the code).
+#define STEER_MIRROR 0
 const float POS_MAX          = 1500.0f;
  
 // --- Calibration sweep ---
@@ -366,25 +373,35 @@ void tickFollow(uint32_t now) {
     lostSince = 0;
     lastPos = linePos;
 
-    // Threshold table. Sensors left -> right: S1 (outer), S2, S3 (middle), S4 (outer).
+    // Sensors left -> right: S1 (outer, unused), S2, S3 (middle), S4 (outer).
     float ramp = min(1.0f, (float)(now - runStart) / RAMP_MS);
     int base = (int)(baseSpeed * ramp);
-    int soft = (int)(base * SOFT_TURN_INNER), hard = (int)(base * HARD_TURN_INNER);
-    bool s1 = isBlack[0], s2 = isBlack[1], s3 = isBlack[2], s4 = isBlack[3];
-    if (s1)            { tgtL = hard; tgtR = base; }   // line far left: sharp left
-    else if (s4)       { tgtL = base; tgtR = hard; }   // line far right: sharp right
-    else if (s2 && s3) { tgtL = base; tgtR = base; }   // line under the middle: straight
-    else if (s2)       { tgtL = soft; tgtR = base; }   // line a bit left: gentle left
-    else               { tgtL = base; tgtR = soft; }   // s3 only, line a bit right: gentle right
+    int hard = (int)(base * HARD_TURN_INNER);
+    float err = darkness[2] - darkness[1];            // + = line toward S3 (right)
+    bool farLeft = isBlack[0], farRight = isBlack[3] && !isBlack[1];
+    int l, r;
+    if (farLeft)       { l = hard; r = base; }        // line far left: sharp left
+    else if (farRight) { l = base; r = hard; }        // line far right: sharp right
+    else if (fabsf(err) < STEER_DEADBAND) { l = base; r = base; }   // centred: straight
+    else {                                            // turn toward the darker middle sensor
+      int corr = (int)(STEER_GAIN * err * base);
+      l = base + corr; r = base - corr;
+    }
+    if (STEER_MIRROR) { int t = l; l = r; r = t; }
+    tgtL = l; tgtR = r;
+    // For the lost-line search and the OLED: which side the line was last on.
+    linePos = farLeft ? -1500 : farRight ? 1500 : err * 1000;
+    lastPos = linePos;
     return;
   }
  
   // Line not seen
   if (state == ST_RUNNING) { state = ST_SEARCHING; lostSince = now; postEvent(EV_LOST); }
   if (now - lostSince > LOST_TIMEOUT_MS) { stopCar(SR_LOST, now); return; }
+  bool right = (lastPos > 0) != (bool)STEER_MIRROR;
   if (fabsf(lastPos) < SEARCH_CENTER_BAND) { tgtL = tgtR = SEARCH_SPEED; }   // gap: keep going
-  else if (lastPos > 0) { tgtL = SEARCH_SPEED;  tgtR = -SEARCH_SPEED; }      // pivot right
-  else                  { tgtL = -SEARCH_SPEED; tgtR = SEARCH_SPEED; }       // pivot left
+  else if (right) { tgtL = SEARCH_SPEED;  tgtR = -SEARCH_SPEED; }            // pivot right
+  else            { tgtL = -SEARCH_SPEED; tgtR = SEARCH_SPEED; }             // pivot left
 }
  
 void tickMotorTest(uint32_t now) {
