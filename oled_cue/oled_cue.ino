@@ -4,8 +4,8 @@
 //
 // Target: ESP32-C6-DevKitM-1, arduino-esp32 3.x, USB CDC On Boot enabled.
 // OLED: 128x64 SSD1306 at I2C 0x3C. The SDA/SCL pins are looked for among
-// I2C_PINS (on 2026-10-30 the display was found with SDA on GPIO20 and SCL on
-// GPIO21), and the display is probed every 2 s so it can be rewired while the
+// I2C_PINS (SDA on GPIO6 and SCL on GPIO7 as of 2026-11-07; was 20/21 before) and
+// the display is probed every 2 s so it can be rewired while the
 // sketch runs.
 // Piezo: PAM8904 piezo driver, SIG on GPIO22 (moved from GPIO23 on 2026-10-30). A steady tone for white and another
 // for black, as in line_motor. U 0 mutes it.
@@ -35,7 +35,7 @@ const int SCREEN_H = 64;
 const uint8_t OLED_ADDR = 0x3C;
 // {SDA, SCL} pairs, tried in order.
 // GPIO22 is the speaker here, so 21/22 is not tried.
-const int I2C_PINS[][2] = {{20, 21}, {21, 20}};
+const int I2C_PINS[][2] = {{6, 7}, {7, 6}};
 const uint16_t OLED_PROBE_INTERVAL_MS = 2000;
 const unsigned MAX_MSG = 40;
 

@@ -87,7 +87,7 @@
       <canvas id="screen" width="256" height="128"></canvas>
       <div>
         <div class="oledstatus" id="oledstatus">Waiting for the board…</div>
-        <div class="hint">128×64 SSD1306 at 0x3C · SDA/SCL on GPIO20/21 (as wired now) or 21/20: the sketch
+        <div class="hint">128×64 SSD1306 at 0x3C · SDA/SCL on GPIO6/7 (as wired now) or 7/6: the sketch
           tries both · VCC 3V3 · GND. Rechecked every 2&nbsp;s.</div>
       </div>
     </div>
@@ -213,7 +213,7 @@ function show(b) {
   const ok = b.connected && b.oled;
   $("oledstatus").textContent = !b.connected ? "Board not connected"
     : ok ? `OLED connected (SDA GPIO${b.sda} · SCL GPIO${b.scl}): the real screen shows the same`
-    : "OLED not detected: check VCC, GND, SDA→20, SCL→21";
+    : "OLED not detected: check VCC, GND, SDA→6, SCL→7";
   $("oledstatus").className = `oledstatus ${ok ? "good" : "bad"}`;
   drawScreen();
 }
