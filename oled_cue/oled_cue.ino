@@ -7,7 +7,7 @@
 // I2C_PINS (SDA on GPIO6 and SCL on GPIO7 as of 2026-11-07; was 20/21 before) and
 // the display is probed every 2 s so it can be rewired while the
 // sketch runs.
-// Piezo: PAM8904 piezo driver, SIG on GPIO22 (moved from GPIO23 on 2026-10-30). A steady tone for white and another
+// Piezo: PAM8904 piezo driver, SIG on GPIO20 (since 2026-11-07; was GPIO22, and GPIO23 before that). A steady tone for white and another
 // for black, as in line_motor. U 0 mutes it.
 // Motor driver inputs are held low (coast).
 //
@@ -34,7 +34,6 @@ const int SCREEN_W = 128;
 const int SCREEN_H = 64;
 const uint8_t OLED_ADDR = 0x3C;
 // {SDA, SCL} pairs, tried in order.
-// GPIO22 is the speaker here, so 21/22 is not tried.
 const int I2C_PINS[][2] = {{6, 7}, {7, 6}};
 const uint16_t OLED_PROBE_INTERVAL_MS = 2000;
 const unsigned MAX_MSG = 40;
@@ -42,7 +41,7 @@ const unsigned MAX_MSG = 40;
 const int IN3_PIN = 18;
 const int IN4_PIN = 19;
 
-const int SPEAKER_PIN = 22;
+const int SPEAKER_PIN = 20;
 // Piezos are loudest near their 2-4 kHz resonance and faint below ~1 kHz.
 const uint32_t DEFAULT_WHITE_TONE_HZ = 2000;
 const uint32_t DEFAULT_BLACK_TONE_HZ = 4000;  // an octave up
