@@ -7,8 +7,10 @@ motors. Messages, tones and the cue are re-sent if the ESP32 resets; motor
 commands never are. While a page is open the server sends a P keepalive every
 0.5 s; the sketch stops the motors 1.5 s after the last one.
 
-Usage: python oled_web.py [port]   (default: the first /dev/cu.usbmodem*,
-re-found whenever the board reconnects)
+Usage: python oled_web.py [port]   (default: the first USB serial port found -
+usbserial*, SLAB_USBtoUART*, wchusbserial*, usbmodem* - re-found whenever the
+board reconnects). Plug into the DevKit's UART port: the sketch turns off the
+native USB port because GPIO12 (USB D-) drives motor IN1.
 Requires pyserial (pip install pyserial).
 """
 
@@ -27,6 +29,8 @@ import serial
 
 HOST, PORT = "127.0.0.1", 8768
 PAGE = Path(__file__).resolve().parent / "oled_web.html"
+# The DevKit's UART USB port (CP210x / CH34x bridge); usbmodem kept for CH343 bridges and older sketches.
+PORT_GLOBS = ("/dev/cu.usbserial*", "/dev/cu.SLAB_USBtoUART*", "/dev/cu.wchusbserial*", "/dev/cu.usbmodem*")
 STATE_LINE = re.compile(r"^STATE cue=(white|black) oled=([01]) sda=(\d+) scl=(\d+) snd=([01]) "
                         r"hz=(\d+),(\d+) tone=(\d+)(?: ma=(-?\d+) mb=(-?\d+) brake=([01]))?")
 MSG_LINE = re.compile(r"^MSG ([WK]) ?(.*)$")
@@ -81,7 +85,8 @@ state = State()
 
 def open_port(fixed):
     while True:
-        candidates = [fixed] if fixed else sorted(glob.glob("/dev/cu.usbmodem*"))
+        candidates = [fixed] if fixed else sorted(
+            p for pat in PORT_GLOBS for p in glob.glob(pat))
         for port in candidates:
             ser = serial.Serial()
             ser.port, ser.baudrate, ser.timeout = port, 115200, 0.2

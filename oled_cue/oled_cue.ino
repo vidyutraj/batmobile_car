@@ -2,14 +2,17 @@
 // white or black from serial, and drives the two motors. Standalone bench test, no sensors: driven by tools/oled_web.py, but any serial
 // monitor works.
 //
-// Target: ESP32-C6-DevKitM-1, arduino-esp32 3.x, USB CDC On Boot enabled.
+// Target: ESP32-C6-DevKitM-1, arduino-esp32 3.x, USB CDC On Boot DISABLED
+// (fqbn esp32:esp32:esp32c6:CDCOnBoot=default). The PCB wires motor IN1 to GPIO12, which is the C6's native USB D-,
+// so the native USB port is switched off and everything (upload and serial) goes through the DevKit's UART USB port
+// (USB-to-serial chip on UART0, GPIO16/17).
 // OLED: 128x64 SSD1306 at I2C 0x3C. The SDA/SCL pins are looked for among
 // I2C_PINS (SDA on GPIO6 and SCL on GPIO7 as of 2026-11-07; was 20/21 before) and
 // the display is probed every 2 s so it can be rewired while the
 // sketch runs.
 // Piezo: PAM8904 piezo driver, SIG on GPIO20 (since 2026-11-07; was GPIO22, and GPIO23 before that). A steady tone for white and another
 // for black, as in line_motor. U 0 mutes it.
-// Motors: DRV8833-style driver, PWM at 20 kHz. Motor A on IN1 = GPIO2, IN2 = GPIO3; motor B on IN3 = GPIO18,
+// Motors: DRV8833-style driver, PWM at 20 kHz. Motor A on IN1 = GPIO12, IN2 = GPIO3; motor B on IN3 = GPIO18,
 // IN4 = GPIO19. Forward = IN1 (IN3) driven, IN2 (IN4) low. Non-zero speeds are scaled onto MIN_DUTY..255 so every one
 // turns the motor. They coast at boot, and stop if no command (P keepalive included) arrives for MOTOR_TIMEOUT_MS,
 // so a closed page or unplugged USB cannot leave them running.
@@ -34,6 +37,8 @@
 //   MSG K <text>
 
 #include <Wire.h>
+#include "soc/usb_serial_jtag_reg.h"
+#include "soc/soc.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -45,7 +50,7 @@ const int I2C_PINS[][2] = {{6, 7}, {7, 6}};
 const uint16_t OLED_PROBE_INTERVAL_MS = 2000;
 const unsigned MAX_MSG = 40;
 
-const int IN1_PIN = 2;    // motor A
+const int IN1_PIN = 12;   // motor A; GPIO12 is also native USB D-
 const int IN2_PIN = 3;
 const int IN3_PIN = 18;   // motor B
 const int IN4_PIN = 19;
@@ -87,11 +92,11 @@ bool braking = false;
 uint32_t lastCmd = 0;
 
 void reportState() {
-  Serial.printf("STATE cue=%s oled=%d sda=%d scl=%d snd=%d hz=%lu,%lu tone=%lu ma=%d mb=%d brake=%d\n",
+  Serial0.printf("STATE cue=%s oled=%d sda=%d scl=%d snd=%d hz=%lu,%lu tone=%lu ma=%d mb=%d brake=%d\n",
                 cueBlack ? "black" : "white", oledOk, sdaPin, sclPin, soundOn, (unsigned long)whiteToneHz,
                 (unsigned long)blackToneHz, (unsigned long)toneHz, dutyA, dutyB, braking);
-  Serial.printf("MSG W %s\n", whiteMsg.c_str());
-  Serial.printf("MSG K %s\n", blackMsg.c_str());
+  Serial0.printf("MSG W %s\n", whiteMsg.c_str());
+  Serial0.printf("MSG K %s\n", blackMsg.c_str());
 }
 
 bool answers() {
@@ -229,7 +234,7 @@ void handleLine(String cmd) {
   }
   else if (c == 'X') brakeMotors();
   else if (c != '?') {
-    Serial.printf("ERR unknown command: %s\n", cmd.c_str());
+    Serial0.printf("ERR unknown command: %s\n", cmd.c_str());
     return;
   }
   dirty = true;
@@ -238,7 +243,9 @@ void handleLine(String cmd) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  // Release GPIO12/13 from the native USB PHY so GPIO12 can drive IN1. The native USB port disappears.
+  CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_USB_PAD_ENABLE);
+  Serial0.begin(115200);
   ledcAttachChannel(SPEAKER_PIN, DEFAULT_WHITE_TONE_HZ, TONE_BITS, SPEAKER_CH);
   const int motorPins[4] = {IN1_PIN, IN2_PIN, IN3_PIN, IN4_PIN};
   for (int i = 0; i < 4; i++) ledcAttachChannel(motorPins[i], MOTOR_PWM_FREQ, MOTOR_PWM_BITS, MOTOR_CH[i]);
@@ -247,13 +254,13 @@ void setup() {
 
   probeOled();
   updateTone();
-  Serial.println("READY oled_cue");
+  Serial0.println("READY oled_cue");
   reportState();
 }
 
 void loop() {
-  while (Serial.available()) {
-    char c = Serial.read();
+  while (Serial0.available()) {
+    char c = Serial0.read();
     if (c == '\n' || c == '\r') {
       handleLine(line);
       line = "";
@@ -267,7 +274,7 @@ void loop() {
   }
   if ((dutyA || dutyB || braking) && millis() - lastCmd > MOTOR_TIMEOUT_MS) {
     setMotors(0, 0);
-    Serial.println("WARN motor timeout: no command, motors stopped");
+    Serial0.println("WARN motor timeout: no command, motors stopped");
     reportState();
   }
   draw();
