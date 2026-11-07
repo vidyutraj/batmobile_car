@@ -102,7 +102,7 @@ const float STEER_GAIN      = 0.80f;
 const float HARD_TURN_INNER = -0.50f;   // S4 (right outer) sees the line: inner wheel reverses, sharp turn
 // 1 flips every steering decision. Use it if the car turns AWAY from the line (sensor order or left/right
 // motors mirrored relative to the code).
-#define STEER_MIRROR 0
+#define STEER_MIRROR 1   // 2026-11-07: car turned away from the line with 0
 const float POS_MAX          = 1500.0f;
  
 // --- Calibration sweep ---
@@ -352,8 +352,8 @@ void tickCalibration(uint32_t now) {
         if (calThenRun) startRun(now); else { state = ST_IDLE; tgtL = tgtR = 0; }
         break;
       }
-      if (lineSeen && linePos > 0) { tgtL = CENTER_SPEED;  tgtR = -CENTER_SPEED; }
-      else                         { tgtL = -CENTER_SPEED; tgtR = CENTER_SPEED; }
+      if (lineSeen && (linePos > 0) != (bool)STEER_MIRROR) { tgtL = CENTER_SPEED;  tgtR = -CENTER_SPEED; }
+      else                                                 { tgtL = -CENTER_SPEED; tgtR = CENTER_SPEED; }
       break;
   }
 }
