@@ -1,9 +1,11 @@
-"""Local web page for cueing the OLED and piezo white or black.
+"""Local web page for cueing the OLED and piezo white or black, and testing the motors.
 
 Talks to the oled_cue sketch over serial and serves a page at
 http://127.0.0.1:8768: White / Black cue buttons, the message shown for each,
-a mirror of the screen, and the piezo tone for each. Messages, tones and the
-cue are re-sent if the ESP32 resets.
+a mirror of the screen, the piezo tone for each, and drive buttons for the two
+motors. Messages, tones and the cue are re-sent if the ESP32 resets; motor
+commands never are. While a page is open the server sends a P keepalive every
+0.5 s; the sketch stops the motors 1.5 s after the last one.
 
 Usage: python oled_web.py [port]   (default: the first /dev/cu.usbmodem*,
 re-found whenever the board reconnects)
@@ -26,7 +28,7 @@ import serial
 HOST, PORT = "127.0.0.1", 8768
 PAGE = Path(__file__).resolve().parent / "oled_web.html"
 STATE_LINE = re.compile(r"^STATE cue=(white|black) oled=([01]) sda=(\d+) scl=(\d+) snd=([01]) "
-                        r"hz=(\d+),(\d+) tone=(\d+)")
+                        r"hz=(\d+),(\d+) tone=(\d+)(?: ma=(-?\d+) mb=(-?\d+) brake=([01]))?")
 MSG_LINE = re.compile(r"^MSG ([WK]) ?(.*)$")
 MAX_MSG = 40
 
@@ -38,7 +40,7 @@ class State:
         self.port = None
         self.listeners = []
         self.board = {"type": "state", "connected": False, "cue": None, "oled": False, "sda": 0, "scl": 0,
-                      "sound": None, "tones": None, "tone": 0,
+                      "sound": None, "tones": None, "tone": 0, "ma": 0, "mb": 0, "brake": False,
                       "white": None, "black": None}
         self.settings = {}    # command letter -> command, replayed after a reset
 
@@ -52,7 +54,7 @@ class State:
         self.board.update(kw)
         self.broadcast(self.board)
 
-    def send(self, cmd):
+    def send(self, cmd, quiet=False):
         with self.lock:
             ser = self.ser
         if not ser:
@@ -61,7 +63,8 @@ class State:
             ser.write((cmd + "\n").encode())
         except (serial.SerialException, OSError):
             return False
-        self.broadcast({"type": "log", "dir": "out", "text": cmd})
+        if not quiet:
+            self.broadcast({"type": "log", "dir": "out", "text": cmd})
         return True
 
     def setting(self, key, cmd):
@@ -98,6 +101,8 @@ def handle_line(text):
     if m:
         state.update(cue=m[1], oled=m[2] == "1", sda=int(m[3]), scl=int(m[4]), sound=m[5] == "1",
                      tones=[int(m[6]), int(m[7])], tone=int(m[8]))
+        if m[9] is not None:
+            state.update(ma=int(m[9]), mb=int(m[10]), brake=m[11] == "1")
     m = MSG_LINE.match(text)
     if m:
         state.update(**{"white" if m[1] == "W" else "black": m[2]})
@@ -142,6 +147,16 @@ def serial_loop(fixed):
             ser.close()
 
 
+def keepalive_loop():
+    # Only while a page is open, so closing it lets the sketch's motor timeout stop the motors.
+    while True:
+        time.sleep(0.5)
+        with state.lock:
+            open_pages = len(state.listeners)
+        if open_pages:
+            state.send("P", quiet=True)
+
+
 def clean(text):
     return " ".join(text.split())[:MAX_MSG]
 
@@ -182,6 +197,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(400)
                 return
             self.send_json({"ok": state.setting("F", f"F {w} {b}")})
+        elif url.path == "/motor":
+            try:
+                a, b = (max(-255, min(255, int(q.get(k, "")))) for k in ("a", "b"))
+            except ValueError:
+                self.send_error(400)
+                return
+            self.send_json({"ok": state.send(f"D {a} {b}")})
+        elif url.path == "/brake":
+            self.send_json({"ok": state.send("X")})
         elif url.path == "/events":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -203,11 +227,19 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def do_POST(self):
+        # navigator.sendBeacon on page close posts /motor?a=0&b=0.
+        if urlparse(self.path).path == "/motor":
+            self.do_GET()
+        else:
+            self.send_error(404)
+
 
 def main():
     fixed = sys.argv[1] if len(sys.argv) > 1 else None
     threading.Thread(target=serial_loop, args=(fixed,), daemon=True).start()
-    print(f"OLED cue page: http://{HOST}:{PORT}")
+    threading.Thread(target=keepalive_loop, daemon=True).start()
+    print(f"OLED / piezo / motor page: http://{HOST}:{PORT}")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 

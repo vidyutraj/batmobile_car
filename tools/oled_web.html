@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OLED Cue</title>
+<title>Batmobile Bench</title>
 <style>
   :root {
     --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e2e0d9;
@@ -56,13 +56,30 @@
          white-space: pre-wrap; }
   #log .out { color: var(--accent); }
   kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  .drive { display: grid; grid-template-columns: repeat(3, 84px); gap: 8px; justify-content: start; }
+  .drive button { height: 64px; font-size: 15px; font-weight: 600; }
+  .drive .stop { background: var(--rec); border-color: var(--rec); color: #fff; }
+  .drive button.on, .motor button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .motorgrid { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .motors { display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 240px; }
+  .motor { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .motor .name { font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
+  .motor .pins { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .bar { position: relative; height: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px;
+         margin: 8px 0; overflow: hidden; }
+  .bar span { position: absolute; top: 0; bottom: 0; left: 50%; background: var(--accent); }
+  .bar::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--muted); }
+  .duty { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .motor .row { margin-top: 0; }
+  .motor label { font-size: 13px; color: var(--muted); }
+  input[type=range] { width: 200px; }
   @media (max-width: 520px) { .cues { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>OLED Cue</h1>
+    <h1>Batmobile Bench</h1>
     <span class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></span>
   </header>
 
@@ -108,6 +125,45 @@
   </section>
 
   <section class="panel">
+    <h2>Motors</h2>
+    <div class="row" style="margin-bottom:12px">
+      <label class="status">Speed <input type="range" id="speed" min="1" max="255" value="160"></label>
+      <span class="duty" id="speedval"></span>
+    </div>
+    <div class="motorgrid">
+      <div class="drive">
+        <span></span><button data-drive="fwd">▲<br>Forward</button><span></span>
+        <button data-drive="left">⟲<br>Spin L</button><button class="stop" data-drive="stop">■<br>Stop</button><button data-drive="right">⟳<br>Spin R</button>
+        <span></span><button data-drive="back">▼<br>Back</button><button data-drive="brake">Brake</button>
+      </div>
+      <div class="motors">
+        <div class="motor" id="motora">
+          <div class="name">Motor A <span class="pins">IN1 GPIO2 · IN2 GPIO3</span></div>
+          <div class="bar"><span id="bara"></span></div>
+          <div class="row">
+            <button data-m="a" data-dir="1">Fwd</button><button data-m="a" data-dir="-1">Rev</button><button data-m="a" data-dir="0">Off</button>
+            <span class="duty" id="dutya">—</span>
+          </div>
+          <label><input type="checkbox" id="flipa"> reverse direction</label>
+        </div>
+        <div class="motor" id="motorb">
+          <div class="name">Motor B <span class="pins">IN3 GPIO18 · IN4 GPIO19</span></div>
+          <div class="bar"><span id="barb"></span></div>
+          <div class="row">
+            <button data-m="b" data-dir="1">Fwd</button><button data-m="b" data-dir="-1">Rev</button><button data-m="b" data-dir="0">Off</button>
+            <span class="duty" id="dutyb">—</span>
+          </div>
+          <label><input type="checkbox" id="flipb"> reverse direction</label>
+        </div>
+      </div>
+    </div>
+    <div class="hint">Spin L = A reverse, B forward (assumes A is the left wheel). Speed 1–255 is scaled onto PWM duty
+      168–255 so every setting turns the motor; the bars show the duty actually applied. Hold the arrow keys to drive,
+      <kbd>S</kbd> stop, <kbd>X</kbd> brake. The motors stop by themselves about 1.5&nbsp;s after this page is closed.
+      Tick "reverse direction" if a wheel spins backwards on Fwd.</div>
+  </section>
+
+  <section class="panel">
     <h2>Serial log</h2>
     <pre id="log"></pre>
   </section>
@@ -138,9 +194,67 @@ const setTones = () => get(`/tones?white=${Math.round(+$("hzwhite").value)}&blac
 $("hzwhite").onchange = setTones;
 $("hzblack").onchange = setTones;
 
+// Motors. Commanded speeds per motor (before the flip), -255..255.
+let cmdA = 0, cmdB = 0, driveMode = "stop";
+const flipped = m => { try { return localStorage.getItem(`flip${m}`) === "1"; } catch { return false; } };
+["a", "b"].forEach(m => {
+  $(`flip${m}`).checked = flipped(m);
+  $(`flip${m}`).onchange = () => {
+    try { localStorage.setItem(`flip${m}`, $(`flip${m}`).checked ? "1" : "0"); } catch {}
+    sendMotors();
+  };
+});
+const sendMotors = () => {
+  const a = $("flipa").checked ? -cmdA : cmdA, b = $("flipb").checked ? -cmdB : cmdB;
+  get(`/motor?a=${a}&b=${b}`);
+};
+const speed = () => +$("speed").value;
+const DRIVES = { fwd: [1, 1], back: [-1, -1], left: [-1, 1], right: [1, -1], stop: [0, 0] };
+function drive(mode) {
+  driveMode = mode;
+  if (mode === "brake") { cmdA = cmdB = 0; get("/brake"); }
+  else { [cmdA, cmdB] = DRIVES[mode].map(d => d * speed()); sendMotors(); }
+  markButtons();
+}
+function markButtons() {
+  document.querySelectorAll("[data-drive]").forEach(b =>
+    b.classList.toggle("on", b.dataset.drive === driveMode && !["stop", "brake"].includes(driveMode)));
+  document.querySelectorAll("[data-m]").forEach(b => {
+    const cur = b.dataset.m === "a" ? cmdA : cmdB;
+    b.classList.toggle("on", +b.dataset.dir !== 0 && Math.sign(cur) === +b.dataset.dir);
+  });
+}
+document.querySelectorAll("[data-drive]").forEach(b => { b.onclick = () => drive(b.dataset.drive); });
+document.querySelectorAll("[data-m]").forEach(b => {
+  b.onclick = () => {
+    const v = +b.dataset.dir * speed();
+    if (b.dataset.m === "a") cmdA = v; else cmdB = v;
+    driveMode = "custom";
+    sendMotors();
+    markButtons();
+  };
+});
+const showSpeed = () => { $("speedval").textContent = `${speed()} / 255`; };
+$("speed").oninput = showSpeed;
+$("speed").onchange = () => {   // re-apply the new speed to whatever is running
+  cmdA = Math.sign(cmdA) * speed();
+  cmdB = Math.sign(cmdB) * speed();
+  if (cmdA || cmdB) sendMotors();
+};
+showSpeed();
+const ARROWS = { ArrowUp: "fwd", ArrowDown: "back", ArrowLeft: "left", ArrowRight: "right" };
+document.addEventListener("keyup", e => {
+  if (ARROWS[e.key] && driveMode === ARROWS[e.key]) drive("stop");
+});
+window.addEventListener("blur", () => { if (driveMode !== "stop" && driveMode !== "brake") drive("stop"); });
+window.addEventListener("pagehide", () => navigator.sendBeacon?.("/motor?a=0&b=0"));
+
 document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT") return;
+  if (e.target.tagName === "INPUT" && e.target.type !== "range" && e.target.type !== "checkbox") return;
+  if (ARROWS[e.key]) { e.preventDefault(); if (!e.repeat) drive(ARROWS[e.key]); return; }
   const k = e.key.toLowerCase();
+  if (k === "s") { drive("stop"); return; }
+  if (k === "x") { drive("brake"); return; }
   if (k === "m") get(`/sound?on=${board?.sound ? 0 : 1}`);
   else if (k === "w") cue("white");
   else if (k === "b") cue("black");
@@ -215,6 +329,19 @@ function show(b) {
     : ok ? `OLED connected (SDA GPIO${b.sda} · SCL GPIO${b.scl}): the real screen shows the same`
     : "OLED not detected: check VCC, GND, SDA→6, SCL→7";
   $("oledstatus").className = `oledstatus ${ok ? "good" : "bad"}`;
+  if (b.connected && !b.ma && !b.mb && (cmdA || cmdB)) {   // stopped on the board (timeout or reset)
+    cmdA = cmdB = 0;
+    driveMode = b.brake ? "brake" : "stop";
+    markButtons();
+  }
+  ["a", "b"].forEach(m => {
+    const duty = b[`m${m}`] ?? 0;
+    const bar = $(`bar${m}`);
+    bar.style.width = `${Math.abs(duty) / 255 * 50}%`;
+    bar.style.left = duty >= 0 ? "50%" : `${50 - Math.abs(duty) / 255 * 50}%`;
+    $(`duty${m}`).textContent = !b.connected ? "—"
+      : b.brake ? "brake" : duty === 0 ? "coast" : `${duty > 0 ? "fwd" : "rev"} ${Math.round(Math.abs(duty) / 2.55)}% duty`;
+  });
   drawScreen();
 }
 

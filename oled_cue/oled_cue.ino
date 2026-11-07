@@ -1,5 +1,5 @@
 // Shows a message on the SSD1306 OLED and plays a tone on the piezo when cued
-// white or black from serial. Standalone audio-visual test, no sensors: driven by tools/oled_web.py, but any serial
+// white or black from serial, and drives the two motors. Standalone bench test, no sensors: driven by tools/oled_web.py, but any serial
 // monitor works.
 //
 // Target: ESP32-C6-DevKitM-1, arduino-esp32 3.x, USB CDC On Boot enabled.
@@ -9,7 +9,10 @@
 // sketch runs.
 // Piezo: PAM8904 piezo driver, SIG on GPIO20 (since 2026-11-07; was GPIO22, and GPIO23 before that). A steady tone for white and another
 // for black, as in line_motor. U 0 mutes it.
-// Motor driver inputs are held low (coast).
+// Motors: DRV8833-style driver, PWM at 20 kHz. Motor A on IN1 = GPIO2, IN2 = GPIO3; motor B on IN3 = GPIO18,
+// IN4 = GPIO19. Forward = IN1 (IN3) driven, IN2 (IN4) low. Non-zero speeds are scaled onto MIN_DUTY..255 so every one
+// turns the motor. They coast at boot, and stop if no command (P keepalive included) arrives for MOTOR_TIMEOUT_MS,
+// so a closed page or unplugged USB cannot leave them running.
 //
 // Each message is word-wrapped and drawn at the largest text size that fits.
 //
@@ -19,9 +22,13 @@
 //   K <text>     message shown for black
 //   U <0|1>      speaker off / on
 //   F <w> <b>    tone in Hz for white / for black, 20..20000
+//   D <a> <b>    motor A / motor B speed, -255 (full reverse) .. 255 (full forward); 0 = coast
+//   X            brake both motors (both inputs high)
+//   P            keepalive for the motor timeout; no reply
 //   ?            report the state
 // Answered after each command and when the display appears or disappears:
 //   STATE cue=<white|black> oled=<0|1> sda=<pin> scl=<pin> snd=<0|1> hz=<white>,<black> tone=<hz>
+//         ma=<duty> mb=<duty> brake=<0|1>   (signed PWM duty actually applied)
 //     (pins 0 if not found; tone 0 when silent)
 //   MSG W <text>
 //   MSG K <text>
@@ -38,8 +45,19 @@ const int I2C_PINS[][2] = {{6, 7}, {7, 6}};
 const uint16_t OLED_PROBE_INTERVAL_MS = 2000;
 const unsigned MAX_MSG = 40;
 
-const int IN3_PIN = 18;
+const int IN1_PIN = 2;    // motor A
+const int IN2_PIN = 3;
+const int IN3_PIN = 18;   // motor B
 const int IN4_PIN = 19;
+const int MOTOR_PWM_FREQ = 20000;   // above audible range
+const int MOTOR_PWM_BITS = 8;       // duty 0..255
+// Lowest duty that starts the motor from rest: 168/255 at 6 V, measured 2026-10-16 (motor_control).
+const int MIN_DUTY = 168;
+const uint32_t MOTOR_TIMEOUT_MS = 1500;
+// LEDC channels are paired on timers (0-1, 2-3, 4-5). The speaker retunes its timer for every tone, so it gets
+// channel 0 alone and the motors take 2-5.
+const int SPEAKER_CH = 0;
+const int MOTOR_CH[4] = {2, 3, 4, 5};   // IN1, IN2, IN3, IN4
 
 const int SPEAKER_PIN = 20;
 // Piezos are loudest near their 2-4 kHz resonance and faint below ~1 kHz.
@@ -64,10 +82,14 @@ uint32_t whiteToneHz = DEFAULT_WHITE_TONE_HZ;
 uint32_t blackToneHz = DEFAULT_BLACK_TONE_HZ;
 uint32_t toneHz = 0;
 
+int dutyA = 0, dutyB = 0;
+bool braking = false;
+uint32_t lastCmd = 0;
+
 void reportState() {
-  Serial.printf("STATE cue=%s oled=%d sda=%d scl=%d snd=%d hz=%lu,%lu tone=%lu\n", cueBlack ? "black" : "white",
-                oledOk, sdaPin, sclPin, soundOn, (unsigned long)whiteToneHz, (unsigned long)blackToneHz,
-                (unsigned long)toneHz);
+  Serial.printf("STATE cue=%s oled=%d sda=%d scl=%d snd=%d hz=%lu,%lu tone=%lu ma=%d mb=%d brake=%d\n",
+                cueBlack ? "black" : "white", oledOk, sdaPin, sclPin, soundOn, (unsigned long)whiteToneHz,
+                (unsigned long)blackToneHz, (unsigned long)toneHz, dutyA, dutyB, braking);
   Serial.printf("MSG W %s\n", whiteMsg.c_str());
   Serial.printf("MSG K %s\n", blackMsg.c_str());
 }
@@ -156,10 +178,39 @@ void updateTone() {
   toneHz = want;
 }
 
+// speed -255..255 -> signed duty, non-zero speeds scaled onto MIN_DUTY..255.
+int speedToDuty(int speed) {
+  speed = constrain(speed, -255, 255);
+  if (speed == 0) return 0;
+  int duty = map(abs(speed), 1, 255, MIN_DUTY, 255);
+  return speed < 0 ? -duty : duty;
+}
+
+void driveMotor(int pinFwd, int pinRev, int duty) {
+  ledcWrite(pinFwd, duty > 0 ? duty : 0);
+  ledcWrite(pinRev, duty < 0 ? -duty : 0);
+}
+
+void setMotors(int speedA, int speedB) {
+  dutyA = speedToDuty(speedA);
+  dutyB = speedToDuty(speedB);
+  braking = false;
+  driveMotor(IN1_PIN, IN2_PIN, dutyA);
+  driveMotor(IN3_PIN, IN4_PIN, dutyB);
+}
+
+void brakeMotors() {
+  for (int pin : {IN1_PIN, IN2_PIN, IN3_PIN, IN4_PIN}) ledcWrite(pin, 255);
+  dutyA = dutyB = 0;
+  braking = true;
+}
+
 void handleLine(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
   char c = toupper(cmd[0]);
+  lastCmd = millis();
+  if (c == 'P') return;
   String arg = cmd.substring(1);
   arg.trim();
   if (arg.length() > MAX_MSG) arg = arg.substring(0, MAX_MSG);
@@ -172,6 +223,11 @@ void handleLine(String cmd) {
     whiteToneHz = constrain(arg.substring(0, space).toInt(), 20, 20000);
     blackToneHz = constrain(arg.substring(space + 1).toInt(), 20, 20000);
   }
+  else if (c == 'D' && arg.indexOf(' ') > 0) {
+    int space = arg.indexOf(' ');
+    setMotors(arg.substring(0, space).toInt(), arg.substring(space + 1).toInt());
+  }
+  else if (c == 'X') brakeMotors();
   else if (c != '?') {
     Serial.printf("ERR unknown command: %s\n", cmd.c_str());
     return;
@@ -183,11 +239,10 @@ void handleLine(String cmd) {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(IN3_PIN, OUTPUT);
-  pinMode(IN4_PIN, OUTPUT);
-  digitalWrite(IN3_PIN, LOW);
-  digitalWrite(IN4_PIN, LOW);
-  ledcAttach(SPEAKER_PIN, DEFAULT_WHITE_TONE_HZ, TONE_BITS);
+  ledcAttachChannel(SPEAKER_PIN, DEFAULT_WHITE_TONE_HZ, TONE_BITS, SPEAKER_CH);
+  const int motorPins[4] = {IN1_PIN, IN2_PIN, IN3_PIN, IN4_PIN};
+  for (int i = 0; i < 4; i++) ledcAttachChannel(motorPins[i], MOTOR_PWM_FREQ, MOTOR_PWM_BITS, MOTOR_CH[i]);
+  setMotors(0, 0);
   ledcWriteTone(SPEAKER_PIN, 0);
 
   probeOled();
@@ -209,6 +264,11 @@ void loop() {
   if (millis() - lastProbe >= OLED_PROBE_INTERVAL_MS) {
     lastProbe = millis();
     probeOled();
+  }
+  if ((dutyA || dutyB || braking) && millis() - lastCmd > MOTOR_TIMEOUT_MS) {
+    setMotors(0, 0);
+    Serial.println("WARN motor timeout: no command, motors stopped");
+    reportState();
   }
   draw();
   updateTone();
