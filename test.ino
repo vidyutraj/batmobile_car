@@ -56,7 +56,7 @@ const bool SENSOR_ENABLED[NUM_SENSORS] = {false, true, true, true};
  
 // If a wheel spins backwards on "motors", swap that motor's two numbers.
 // If "LEFT forward" moves the right wheel, swap the L_ and R_ pairs.
-const uint8_t L_IN1 = 19, L_IN2 = 18;
+const uint8_t L_IN1 = 18, L_IN2 = 19;   // swapped 2026-11-07: left wheel ran backwards
 const uint8_t R_IN1 = 12, R_IN2 = 3;
  
 const uint8_t I2C_SDA = 6, I2C_SCL = 7;  // tried swapped automatically if the OLED isn't found
@@ -91,23 +91,22 @@ const float SENSOR_WEIGHT[NUM_SENSORS] = {-1500, -500, 500, 1500};
 const float POS_MAX          = 1500.0f;
  
 // --- Calibration sweep ---
-const int      CAL_SPEED       = 180;       // pivot speed while sweeping (on USB power even 255 stalled with both
-                                            // motors; retune on battery)
+const int      CAL_SPEED       = 150;       // pivot speed while sweeping
 const uint32_t CAL_SWEEP_MS    = 450;       // left for this long, then right for 2x this long
-const int      CENTER_SPEED    = 150;       // pivot speed while re-centering on the line
+const int      CENTER_SPEED    = 110;       // pivot speed while re-centering on the line
 const float    CENTER_TOL      = 350.0f;    // |position| below this counts as centered
  
 // --- Motors ---
 const uint32_t PWM_FREQ      = 20000;       // above hearing range
 const uint8_t  PWM_BITS      = 8;           // speed / duty range 0-255
-const int      MIN_DUTY      = 168;         // lowest duty that starts the motor: 168/255 at 6 V on the bench
-                                            // (2026-10-16). At 60 the 150-speed cal sweep (~174 duty) stalled on the floor.
+const int      MIN_DUTY      = 70;          // lowest duty that turns the wheels on the floor (MEASURE). 168 was only
+                                            // needed on laptop USB power; on the battery it made the car far too strong.
 const int      SLEW_PER_TICK = 20;          // max speed change per 5 ms (limits current spikes / brownouts)
 const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, then coast
 const int      MOTOR_TEST_SPEED = 160;
  
 // --- Line following (live-tunable over serial) ---
-volatile int   baseSpeed = 140;             // straight-line speed, 0-255
+volatile int   baseSpeed = 120;             // straight-line speed, 0-255
 volatile float kp = 0.10f;                  // speed units per position unit
 volatile float ki = 0.0f;
 volatile float kd = 0.004f;                 // speed units per (position unit / second)
@@ -117,7 +116,7 @@ const float    CURVE_SLOWDOWN = 0.35f;      // base speed drops up to 35 % at fu
 const uint32_t RAMP_MS        = 400;        // soft start from 0 to base speed
  
 // --- Lost line / safety ---
-const int      SEARCH_SPEED       = 160;
+const int      SEARCH_SPEED       = 130;
 const float    SEARCH_CENTER_BAND = 400.0f; // last seen near center -> creep straight instead of pivoting
 const uint32_t LOST_TIMEOUT_MS    = 1500;
 const uint32_t ALL_BLACK_STOP_MS  = 300;
