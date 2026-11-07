@@ -8,7 +8,8 @@
  *      -> Place the car with the line between the two middle sensors before/at power-on.
  *   3. Auto-calibration: pivots left, then right, across the line (~1 s) to learn the
  *      black and white reading of EACH sensor, then pivots back until centered.
- *   4. Follows the line with PD(+I) control on a weighted line position.
+ *   4. Follows the line with simple threshold logic: each sensor is black or white (threshold halfway between
+ *      its calibrated levels), and a table picks straight / gentle turn / sharp turn.
  *   5. Line lost  -> pivots toward where the line was last seen; stops after LOST_TIMEOUT_MS.
  *      All black  -> (crossing line or the car was picked up) drives straight; stops
  *                    if it lasts longer than ALL_BLACK_STOP_MS.
@@ -88,12 +89,19 @@ const float DARK_FLOOR       = 0.10f;       // ignore darkness below this (white
 const float LINE_SEEN_DARK   = 0.40f;       // some sensor at least this dark = line is visible
 const float ALL_BLACK_DARK   = 0.75f;       // every sensor at least this dark = all black
 const float SENSOR_WEIGHT[NUM_SENSORS] = {-1500, -500, 500, 1500};
+// Threshold logic: a sensor is BLACK once its darkness (0 = calibrated white, 1 = calibrated black) rises above
+// BLACK_ON, and WHITE again once it falls below BLACK_OFF. The gap is hysteresis so it doesn't flicker at the edge.
+const float BLACK_ON  = 0.60f;
+const float BLACK_OFF = 0.40f;
+// Inner-wheel speed as a fraction of the base speed (outer wheel runs at base).
+const float SOFT_TURN_INNER = 0.30f;    // a middle sensor sees the line: gentle turn
+const float HARD_TURN_INNER = -0.50f;   // an outer sensor sees the line: inner wheel reverses, sharp turn
 const float POS_MAX          = 1500.0f;
  
 // --- Calibration sweep ---
-const int      CAL_SPEED       = 150;       // pivot speed while sweeping
-const uint32_t CAL_SWEEP_MS    = 450;       // left for this long, then right for 2x this long
-const int      CENTER_SPEED    = 110;       // pivot speed while re-centering on the line
+const int      CAL_SPEED       = 130;       // pivot speed while sweeping
+const uint32_t CAL_SWEEP_MS    = 550;       // left for this long, then right for 2x this long
+const int      CENTER_SPEED    = 100;       // pivot speed while re-centering on the line
 const float    CENTER_TOL      = 350.0f;    // |position| below this counts as centered
  
 // --- Motors ---
@@ -106,7 +114,7 @@ const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, t
 const int      MOTOR_TEST_SPEED = 160;
  
 // --- Line following (live-tunable over serial) ---
-volatile int   baseSpeed = 120;             // straight-line speed, 0-255
+volatile int   baseSpeed = 110;             // straight-line speed, 0-255
 volatile float kp = 0.10f;                  // speed units per position unit
 volatile float ki = 0.0f;
 volatile float kd = 0.004f;                 // speed units per (position unit / second)
@@ -116,7 +124,7 @@ const float    CURVE_SLOWDOWN = 0.35f;      // base speed drops up to 35 % at fu
 const uint32_t RAMP_MS        = 400;        // soft start from 0 to base speed
  
 // --- Lost line / safety ---
-const int      SEARCH_SPEED       = 130;
+const int      SEARCH_SPEED       = 110;
 const float    SEARCH_CENTER_BAND = 400.0f; // last seen near center -> creep straight instead of pivoting
 const uint32_t LOST_TIMEOUT_MS    = 1500;
 const uint32_t ALL_BLACK_STOP_MS  = 300;
@@ -143,6 +151,7 @@ volatile int   mv[NUM_SENSORS];
 volatile float darkness[NUM_SENSORS];         // 0 = white, 1 = black (after calibration)
 volatile float linePos = 0;                   // -1500 (line far left) ... +1500 (far right)
 volatile bool  lineSeen = false;
+volatile bool  isBlack[NUM_SENSORS];         // thresholded, with hysteresis (false for unused sensors)
 volatile int   outL = 0, outR = 0;            // speeds actually applied
 volatile int   countdownSec = 5;
 volatile int   motorTestStep = 0;
@@ -209,27 +218,27 @@ void readSensors() {
   }
 }
  
-// Turns mV into per-sensor darkness (0..1) and a weighted line position.
+// Turns mV into per-sensor darkness (0..1), a black/white decision per sensor (threshold halfway between the
+// calibrated white and black, with hysteresis), and a rough line position from the black sensors.
 void computeLine() {
-  if (!calValid) { lineSeen = false; return; }
-  float num = 0, den = 0, maxDark = 0;
+  if (!calValid) { lineSeen = false; for (int i = 0; i < NUM_SENSORS; i++) isBlack[i] = false; return; }
+  float num = 0;
+  int n = 0;
   for (int i = 0; i < NUM_SENSORS; i++) {
-    if (!sensorOk[i]) { darkness[i] = 0; continue; }   // excluded sensor: ignored in position and line-seen
+    if (!sensorOk[i]) { darkness[i] = 0; isBlack[i] = false; continue; }   // unused sensor
     float d = (float)(whiteMv[i] - mv[i]) / (float)(whiteMv[i] - blackMv[i]);
     d = constrain(d, 0.0f, 1.0f);
     darkness[i] = d;
-    maxDark = max(maxDark, d);
-    float w = max(0.0f, d - DARK_FLOOR);
-    num += w * SENSOR_WEIGHT[i];
-    den += w;
+    if (isBlack[i] ? d < BLACK_OFF : d > BLACK_ON) isBlack[i] = !isBlack[i];
+    if (isBlack[i]) { num += SENSOR_WEIGHT[i]; n++; }
   }
-  lineSeen = maxDark >= LINE_SEEN_DARK && den > 0;
-  if (lineSeen) linePos = num / den;
+  lineSeen = n > 0;
+  if (lineSeen) linePos = num / n;
 }
  
 bool allBlack() {
   if (!calValid) return false;
-  for (int i = 0; i < NUM_SENSORS; i++) if (sensorOk[i] && darkness[i] < ALL_BLACK_DARK) return false;
+  for (int i = 0; i < NUM_SENSORS; i++) if (sensorOk[i] && !isBlack[i]) return false;
   return true;
 }
  
@@ -277,7 +286,7 @@ void tickCountdown(uint32_t now) {
 }
  
 // Phase 0: pivot left. Phase 1: pivot right (twice as long, so it crosses back over).
-// Then validate, and phase 2: pivot back until the line is centered.
+// Then validate, and phase 2: pivot back until a middle sensor is on the line.
 void tickCalibration(uint32_t now) {
   for (int i = 0; i < NUM_SENSORS; i++) {
     calMin[i] = min(calMin[i], (int)mv[i]);
@@ -324,9 +333,9 @@ void tickCalibration(uint32_t now) {
     }
  
     case 2:
-      // The car ended the sweep rotated right of where it started, so the line is
-      // most likely to its left. Pivot toward the line until it's under the middle.
-      if (lineSeen && fabsf(linePos) < CENTER_TOL) {
+      // The car ended the sweep rotated right of where it started, so the line is most likely to its left.
+      // Pivot toward the line until one of the two middle sensors (S2, S3) reads black.
+      if (isBlack[1] || isBlack[2]) {
         if (calThenRun) startRun(now);
         else { state = ST_IDLE; tgtL = tgtR = 0; }
         break;
@@ -353,26 +362,20 @@ void tickFollow(uint32_t now) {
   allBlackSince = 0;
  
   if (lineSeen) {
-    if (state == ST_SEARCHING) {
-      state = ST_RUNNING;
-      integ = 0; dFilt = 0; prevErr = linePos;   // no derivative kick on re-acquire
-      postEvent(EV_FOUND);
-    }
+    if (state == ST_SEARCHING) { state = ST_RUNNING; postEvent(EV_FOUND); }
     lostSince = 0;
     lastPos = linePos;
- 
-    const float dt = CONTROL_PERIOD_MS / 1000.0f;
-    float err = linePos;                          // + = line is to the right
-    integ = constrain(integ + err * dt, -I_LIMIT, I_LIMIT);
-    float deriv = (err - prevErr) / dt;
-    dFilt += D_FILTER * (deriv - dFilt);
-    prevErr = err;
-    float corr = kp * err + ki * integ + kd * dFilt;
- 
+
+    // Threshold table. Sensors left -> right: S1 (outer), S2, S3 (middle), S4 (outer).
     float ramp = min(1.0f, (float)(now - runStart) / RAMP_MS);
-    float base = baseSpeed * ramp * (1.0f - CURVE_SLOWDOWN * fabsf(err) / POS_MAX);
-    tgtL = (int)(base + corr);
-    tgtR = (int)(base - corr);
+    int base = (int)(baseSpeed * ramp);
+    int soft = (int)(base * SOFT_TURN_INNER), hard = (int)(base * HARD_TURN_INNER);
+    bool s1 = isBlack[0], s2 = isBlack[1], s3 = isBlack[2], s4 = isBlack[3];
+    if (s1)            { tgtL = hard; tgtR = base; }   // line far left: sharp left
+    else if (s4)       { tgtL = base; tgtR = hard; }   // line far right: sharp right
+    else if (s2 && s3) { tgtL = base; tgtR = base; }   // line under the middle: straight
+    else if (s2)       { tgtL = soft; tgtR = base; }   // line a bit left: gentle left
+    else               { tgtL = base; tgtR = soft; }   // s3 only, line a bit right: gentle right
     return;
   }
  
@@ -688,7 +691,7 @@ void handleEvents() {
  
 void printTelemetry() {
   char pat[NUM_SENSORS + 1];
-  for (int i = 0; i < NUM_SENSORS; i++) pat[i] = calValid ? (darkness[i] >= 0.5f ? '1' : '0') : '-';
+  for (int i = 0; i < NUM_SENSORS; i++) pat[i] = !calValid || !sensorOk[i] ? '-' : isBlack[i] ? '1' : '0';
   pat[NUM_SENSORS] = 0;
   Serial.printf("%lu %s %d %d %d %d [%s] %s L%d R%d\n", (unsigned long)millis(), STATE_NAMES[state],
                 mv[0], mv[1], mv[2], mv[3], pat,
