@@ -16,6 +16,8 @@
 // IN4 = GPIO19. Forward = IN1 (IN3) driven, IN2 (IN4) low. Non-zero speeds are scaled onto MIN_DUTY..255 so every one
 // turns the motor. They coast at boot, and stop if no command (P keepalive included) arrives for MOTOR_TIMEOUT_MS,
 // so a closed page or unplugged USB cannot leave them running.
+// Sensors: VOUT1..VOUT4 on GPIO0, GPIO1, GPIO2, GPIO5 (ADC1 channels 0, 1, 2, 5). Read only: reported every
+// SENSOR_INTERVAL_MS as a SENS line, nothing acts on them yet.
 //
 // Each message is word-wrapped and drawn at the largest text size that fits.
 //
@@ -35,6 +37,8 @@
 //     (pins 0 if not found; tone 0 when silent)
 //   MSG W <text>
 //   MSG K <text>
+// Every SENSOR_INTERVAL_MS:
+//   SENS <mv1> <mv2> <mv3> <mv4>   (VOUT1..VOUT4 in millivolts)
 
 #include <Wire.h>
 #include "soc/usb_serial_jtag_reg.h"
@@ -64,6 +68,10 @@ const uint32_t MOTOR_TIMEOUT_MS = 1500;
 const int SPEAKER_CH = 0;
 const int MOTOR_CH[4] = {2, 3, 4, 5};   // IN1, IN2, IN3, IN4
 
+const uint8_t SENSOR_PINS[4] = {0, 1, 2, 5};   // VOUT1..VOUT4
+const uint8_t SENSOR_SAMPLES = 16;
+const uint16_t SENSOR_INTERVAL_MS = 100;
+
 const int SPEAKER_PIN = 20;
 // Piezos are loudest near their 2-4 kHz resonance and faint below ~1 kHz.
 const uint32_t DEFAULT_WHITE_TONE_HZ = 2000;
@@ -90,6 +98,7 @@ uint32_t toneHz = 0;
 int dutyA = 0, dutyB = 0;
 bool braking = false;
 uint32_t lastCmd = 0;
+uint32_t lastSensor = 0;
 
 void reportState() {
   Serial0.printf("STATE cue=%s oled=%d sda=%d scl=%d snd=%d hz=%lu,%lu tone=%lu ma=%d mb=%d brake=%d\n",
@@ -183,6 +192,22 @@ void updateTone() {
   toneHz = want;
 }
 
+// Averages several calibrated readings. The first read after switching channels is discarded: the ADC's sample
+// capacitor still holds charge from the previous channel.
+uint32_t readMillivolts(uint8_t pin) {
+  analogReadMilliVolts(pin);
+  uint32_t sum = 0;
+  for (uint8_t i = 0; i < SENSOR_SAMPLES; i++) sum += analogReadMilliVolts(pin);
+  return sum / SENSOR_SAMPLES;
+}
+
+void reportSensors() {
+  uint32_t mv[4];
+  for (int i = 0; i < 4; i++) mv[i] = readMillivolts(SENSOR_PINS[i]);
+  Serial0.printf("SENS %lu %lu %lu %lu\n", (unsigned long)mv[0], (unsigned long)mv[1], (unsigned long)mv[2],
+                 (unsigned long)mv[3]);
+}
+
 // speed -255..255 -> signed duty, non-zero speeds scaled onto MIN_DUTY..255.
 int speedToDuty(int speed) {
   speed = constrain(speed, -255, 255);
@@ -250,6 +275,8 @@ void setup() {
   const int motorPins[4] = {IN1_PIN, IN2_PIN, IN3_PIN, IN4_PIN};
   for (int i = 0; i < 4; i++) ledcAttachChannel(motorPins[i], MOTOR_PWM_FREQ, MOTOR_PWM_BITS, MOTOR_CH[i]);
   setMotors(0, 0);
+  analogReadResolution(12);
+  for (uint8_t pin : SENSOR_PINS) analogSetPinAttenuation(pin, ADC_11db);   // ~0.15-3.1 V usable
   ledcWriteTone(SPEAKER_PIN, 0);
 
   probeOled();
@@ -276,6 +303,10 @@ void loop() {
     setMotors(0, 0);
     Serial0.println("WARN motor timeout: no command, motors stopped");
     reportState();
+  }
+  if (millis() - lastSensor >= SENSOR_INTERVAL_MS) {
+    lastSensor = millis();
+    reportSensors();
   }
   draw();
   updateTone();

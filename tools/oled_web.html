@@ -73,6 +73,14 @@
   .motor .row { margin-top: 0; }
   .motor label { font-size: 13px; color: var(--muted); }
   input[type=range] { width: 200px; }
+  .sensors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .sensor { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .sensor .name { font-size: 13px; color: var(--muted); }
+  .sensor .mv { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .vbar { height: 80px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; margin-top: 8px;
+          position: relative; overflow: hidden; }
+  .vbar span { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); }
+  @media (max-width: 520px) { .sensors { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 520px) { .cues { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -122,6 +130,18 @@
     </div>
     <div class="hint">PAM8904 · SIG GPIO20 · VIN/GND from the supply · VO+/VO− to the piezo. Piezos are loudest
       around 2–4&nbsp;kHz. <kbd>M</kbd> mute.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Sensors <span class="status" id="sensage"></span></h2>
+    <div class="sensors">
+      <div class="sensor"><div class="name">VOUT1 · GPIO0</div><div class="mv" id="mv0">—</div><div class="vbar"><span id="vb0"></span></div></div>
+      <div class="sensor"><div class="name">VOUT2 · GPIO1</div><div class="mv" id="mv1">—</div><div class="vbar"><span id="vb1"></span></div></div>
+      <div class="sensor"><div class="name">VOUT3 · GPIO2</div><div class="mv" id="mv2">—</div><div class="vbar"><span id="vb2"></span></div></div>
+      <div class="sensor"><div class="name">VOUT4 · GPIO5</div><div class="mv" id="mv3">—</div><div class="vbar"><span id="vb3"></span></div></div>
+    </div>
+    <div class="hint">Millivolts, 16-sample average, about 10 updates a second. Bars span 0–3300&nbsp;mV. Read only: nothing
+      acts on them yet. Near 0&nbsp;mV on every channel usually means the sensor board has lost power or GND.</div>
   </section>
 
   <section class="panel">
@@ -308,6 +328,7 @@ function drawScreen() {
 
 function show(b) {
   board = b;
+  if (b.sens && !lastSens) showSens(b.sens);
   $("dot").className = `dot${b.connected ? " on" : ""}`;
   $("status").textContent = b.connected ? `Connected · ${b.port ?? ""}` : "Board not connected: waiting for USB";
   ["white", "black"].forEach(which => {
@@ -355,11 +376,24 @@ function log(m) {
   el.scrollTop = el.scrollHeight;
 }
 
+let lastSens = 0;
+function showSens(mv) {
+  lastSens = Date.now();
+  mv.forEach((v, i) => {
+    $(`mv${i}`).textContent = `${v} mV`;
+    $(`vb${i}`).style.height = `${Math.min(100, v / 3300 * 100)}%`;
+  });
+}
+setInterval(() => {
+  $("sensage").textContent = !lastSens ? "· no data yet" : Date.now() - lastSens > 1000 ? "· no data (stale)" : "· live";
+}, 500);
+
 const events = new EventSource("/events");
 events.onmessage = e => {
   const m = JSON.parse(e.data);
   if (m.type === "state") show(m);
   else if (m.type === "log") log(m);
+  else if (m.type === "sens") showSens(m.mv);
 };
 events.onerror = () => { $("dot").className = "dot"; $("status").textContent = "Server stopped"; };
 </script>

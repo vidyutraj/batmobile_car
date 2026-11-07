@@ -3,7 +3,7 @@
 Talks to the oled_cue sketch over serial and serves a page at
 http://127.0.0.1:8768: White / Black cue buttons, the message shown for each,
 a mirror of the screen, the piezo tone for each, and drive buttons for the two
-motors. Messages, tones and the cue are re-sent if the ESP32 resets; motor
+motors, plus live VOUT1-4 sensor readings. Messages, tones and the cue are re-sent if the ESP32 resets; motor
 commands never are. While a page is open the server sends a P keepalive every
 0.5 s; the sketch stops the motors 1.5 s after the last one.
 
@@ -33,6 +33,7 @@ PAGE = Path(__file__).resolve().parent / "oled_web.html"
 PORT_GLOBS = ("/dev/cu.usbserial*", "/dev/cu.SLAB_USBtoUART*", "/dev/cu.wchusbserial*", "/dev/cu.usbmodem*")
 STATE_LINE = re.compile(r"^STATE cue=(white|black) oled=([01]) sda=(\d+) scl=(\d+) snd=([01]) "
                         r"hz=(\d+),(\d+) tone=(\d+)(?: ma=(-?\d+) mb=(-?\d+) brake=([01]))?")
+SENS_LINE = re.compile(r"^SENS (\d+) (\d+) (\d+) (\d+)$")
 MSG_LINE = re.compile(r"^MSG ([WK]) ?(.*)$")
 MAX_MSG = 40
 
@@ -44,7 +45,7 @@ class State:
         self.port = None
         self.listeners = []
         self.board = {"type": "state", "connected": False, "cue": None, "oled": False, "sda": 0, "scl": 0,
-                      "sound": None, "tones": None, "tone": 0, "ma": 0, "mb": 0, "brake": False,
+                      "sound": None, "tones": None, "tone": 0, "ma": 0, "mb": 0, "brake": False, "sens": None,
                       "white": None, "black": None}
         self.settings = {}    # command letter -> command, replayed after a reset
 
@@ -102,6 +103,12 @@ def open_port(fixed):
 
 
 def handle_line(text):
+    m = SENS_LINE.match(text)
+    if m:
+        # 10 per second: sent as its own message and kept out of the serial log.
+        state.board["sens"] = [int(v) for v in m.groups()]
+        state.broadcast({"type": "sens", "mv": state.board["sens"]})
+        return
     m = STATE_LINE.match(text)
     if m:
         state.update(cue=m[1], oled=m[2] == "1", sda=int(m[3]), scl=int(m[4]), sound=m[5] == "1",
