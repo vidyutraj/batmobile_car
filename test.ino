@@ -107,8 +107,8 @@ const float    CENTER_TOL      = 350.0f;    // |position| below this counts as c
 // --- Motors ---
 const uint32_t PWM_FREQ      = 20000;       // above hearing range
 const uint8_t  PWM_BITS      = 8;           // speed / duty range 0-255
-const int      MIN_DUTY      = 70;          // lowest duty that turns the wheels on the floor (MEASURE). 168 was only
-                                            // needed on laptop USB power; on the battery it made the car far too strong.
+const int      MIN_DUTY      = 120;         // lowest duty that turns the wheels on the floor. On the battery 168 was
+                                            // far too strong and 70 stalled (straight at speed 120 = ~61% duty).
 const int      SLEW_PER_TICK = 20;          // max speed change per 5 ms (limits current spikes / brownouts)
 const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, then coast
 const int      MOTOR_TEST_SPEED = 160;
