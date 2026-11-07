@@ -114,14 +114,15 @@ const float    CENTER_TOL      = 350.0f;    // |position| below this counts as c
 // --- Motors ---
 const uint32_t PWM_FREQ      = 20000;       // above hearing range
 const uint8_t  PWM_BITS      = 8;           // speed / duty range 0-255
-const int      MIN_DUTY      = 120;         // lowest duty that turns the wheels on the floor. On the battery 168 was
-                                            // far too strong and 70 stalled (straight at speed 120 = ~61% duty).
+const int      MIN_DUTY      = 145;         // lowest duty used for any non-zero speed. On the battery 168 was too
+                                            // strong and 70 stalled; 120 worked on bare floor but the omni wheel
+                                            // got stuck at the tape edge.
 const int      SLEW_PER_TICK = 20;          // max speed change per 5 ms (limits current spikes / brownouts)
 const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, then coast
 const int      MOTOR_TEST_SPEED = 160;
  
 // --- Line following (live-tunable over serial) ---
-volatile int   baseSpeed = 120;             // straight-line speed, 0-255
+volatile int   baseSpeed = 140;             // straight-line speed, 0-255
 volatile float kp = 0.10f;                  // speed units per position unit
 volatile float ki = 0.0f;
 volatile float kd = 0.004f;                 // speed units per (position unit / second)
