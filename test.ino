@@ -30,6 +30,7 @@
  *     motors  test each wheel fwd/rev (lift the car!)
  *     log     toggle 20 Hz telemetry: state, sensor mV, on-line pattern, position, L/R
  *     show    print settings + calibration
+ *     dump    print the black box: the last 2 s before the last two stops (saved in flash)
  *     kp X / ki X / kd X / base X     live-tune the controller
  *   BOOT button (GPIO9): stop when moving, otherwise "go".
  *
@@ -47,6 +48,7 @@
 #include <U8g2lib.h>
 #include "driver/gpio.h"
 #include "esp_system.h"
+#include <Preferences.h>
  
 // ================================ PINS ================================
 const int NUM_SENSORS = 4;
@@ -642,7 +644,7 @@ void printCal() {
 }
  
 void printHelp() {
-  Serial.println("Commands: debug go run stop cal motors log show | kp X ki X kd X base X");
+  Serial.println("Commands: debug go run stop cal motors log show dump | kp X ki X kd X base X");
 }
  
 void handleLine(char *s) {
@@ -654,6 +656,7 @@ void handleLine(char *s) {
   else if (!strcmp(s, "cal"))    sendCmd(CMD_CAL);
   else if (!strcmp(s, "motors")) { Serial.println("Motor test - wheels off the ground!"); sendCmd(CMD_MOTOR_TEST); }
   else if (!strcmp(s, "log"))    { telemetry = !telemetry; if (telemetry) Serial.println("ms state S1 S2 S3 S4 [pattern] pos L R"); }
+  else if (!strcmp(s, "dump"))   bboxDump();
   else if (!strcmp(s, "show"))   {
     Serial.printf("state=%s base=%d kp=%.4f ki=%.4f kd=%.5f\n", STATE_NAMES[state], (int)baseSpeed, kp, ki, kd);
     printCal();
@@ -679,6 +682,100 @@ void handleSerial() {
   if (n && millis() - lastChar > 300) { buf[n] = 0; handleLine(buf); n = 0; }
 }
  
+// ================================ BLACK BOX ================================
+// Debug only, does not change driving. loop() (low priority, not the 200 Hz control task) records a snapshot
+// every BBOX_PERIOD_MS into a ring buffer. When the car stops, the last BBOX_N snapshots are saved to flash
+// (NVS) - after the motors are already off. Two slots, "last" and "prev", so a calibration on the desk after
+// plugging in USB can't wipe the run you want. Read them with the "dump" command.
+const int      BBOX_N         = 40;    // 40 x 50 ms = the last 2 s before the stop
+const uint32_t BBOX_PERIOD_MS = 50;
+
+struct BBoxEntry {
+  uint32_t ms;
+  int16_t  mv[NUM_SENSORS];
+  int16_t  pos, outL, outR;
+  uint8_t  state, pattern;   // pattern: bit i = sensor i black
+};
+struct BBoxBlob {
+  uint32_t   magic, stopMs;
+  uint8_t    reason, count, okBits, pad;
+  int16_t    blackMv[NUM_SENSORS], whiteMv[NUM_SENSORS];
+  BBoxEntry  e[BBOX_N];      // oldest first
+};
+const uint32_t BBOX_MAGIC = 0xB0C5B0C5;
+
+BBoxEntry bbox[BBOX_N];
+int bboxHead = 0, bboxCount = 0;
+
+void bboxRecord() {
+  BBoxEntry &e = bbox[bboxHead];
+  e.ms = millis();
+  for (int i = 0; i < NUM_SENSORS; i++) e.mv[i] = mv[i];
+  e.pos = lineSeen ? (int16_t)linePos : INT16_MIN;
+  e.outL = outL; e.outR = outR;
+  e.state = state;
+  e.pattern = 0;
+  for (int i = 0; i < NUM_SENSORS; i++) if (isBlack[i]) e.pattern |= 1 << i;
+  bboxHead = (bboxHead + 1) % BBOX_N;
+  if (bboxCount < BBOX_N) bboxCount++;
+}
+
+void bboxSave() {
+  static BBoxBlob b;   // static: ~1 KB, kept off the loop task's stack
+  b.magic = BBOX_MAGIC;
+  b.stopMs = millis();
+  b.reason = stopReason;
+  b.count = bboxCount;
+  b.okBits = 0;
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    if (sensorOk[i]) b.okBits |= 1 << i;
+    b.blackMv[i] = blackMv[i]; b.whiteMv[i] = whiteMv[i];
+  }
+  for (int k = 0; k < bboxCount; k++) b.e[k] = bbox[(bboxHead - bboxCount + k + BBOX_N) % BBOX_N];
+  Preferences prefs;
+  if (!prefs.begin("bbox", false)) { Serial.println("black box: NVS open failed"); return; }
+  static BBoxBlob old;
+  if (prefs.getBytes("last", &old, sizeof old) == sizeof old) prefs.putBytes("prev", &old, sizeof old);
+  prefs.putBytes("last", &b, sizeof b);
+  prefs.end();
+  Serial.println("black box saved (type 'dump' to read it)");
+}
+
+void bboxPrintSlot(Preferences &prefs, const char *key) {
+  static BBoxBlob b;
+  if (prefs.getBytes(key, &b, sizeof b) != sizeof b || b.magic != BBOX_MAGIC) {
+    Serial.printf("[%s] empty\n", key);
+    return;
+  }
+  Serial.printf("[%s] stop: %s, at %lu ms after boot, %d snapshots every %lu ms\n", key,
+                b.reason < sizeof(STOP_TEXT) / sizeof(STOP_TEXT[0]) ? STOP_TEXT[b.reason] : "?",
+                (unsigned long)b.stopMs, b.count, (unsigned long)BBOX_PERIOD_MS);
+  Serial.print("  cal black/white mV:");
+  for (int i = 0; i < NUM_SENSORS; i++)
+    Serial.printf("  S%d %d/%d%s", i + 1, b.blackMv[i], b.whiteMv[i], b.okBits & (1 << i) ? "" : "(off)");
+  Serial.println();
+  Serial.println("  ms      state        S1    S2    S3    S4  pat   pos     L    R");
+  for (int k = 0; k < b.count; k++) {
+    const BBoxEntry &e = b.e[k];
+    char pat[NUM_SENSORS + 1];
+    for (int i = 0; i < NUM_SENSORS; i++) pat[i] = e.pattern & (1 << i) ? '1' : '0';
+    pat[NUM_SENSORS] = 0;
+    char pos[8];
+    if (e.pos == INT16_MIN) strcpy(pos, "none"); else snprintf(pos, sizeof pos, "%d", e.pos);
+    Serial.printf("  %-7lu %-11s %5d %5d %5d %5d  %s %5s %5d %4d\n", (unsigned long)e.ms,
+                  e.state < sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0]) ? STATE_NAMES[e.state] : "?",
+                  e.mv[0], e.mv[1], e.mv[2], e.mv[3], pat, pos, e.outL, e.outR);
+  }
+}
+
+void bboxDump() {
+  Preferences prefs;
+  if (!prefs.begin("bbox", true)) { Serial.println("black box: nothing saved yet"); return; }
+  bboxPrintSlot(prefs, "last");
+  bboxPrintSlot(prefs, "prev");
+  prefs.end();
+}
+
 void handleEvents() {
   uint8_t e;
   while (xQueueReceive(eventQueue, &e, 0) == pdTRUE) {
@@ -695,6 +792,7 @@ void handleEvents() {
       case EV_STOPPED:
         Serial.printf("--- STOP: %s ---\n", STOP_TEXT[stopReason]);
         if (stopReason != SR_CAL_FAIL) playSound(stopReason == SR_CENTER_FAIL ? SND_ERROR : SND_STOP);
+        bboxSave();   // motors are already stopped
         break;
       case EV_MT_STEP: {
         static const char *names[] = {"LEFT forward", "stop", "LEFT reverse", "stop",
@@ -803,7 +901,8 @@ void loop() {
   updateSound();
   updateLed();
  
-  static uint32_t lastDisp = 0, lastTele = 0;
+  static uint32_t lastDisp = 0, lastTele = 0, lastBbox = 0;
+  if (millis() - lastBbox >= BBOX_PERIOD_MS) { lastBbox = millis(); bboxRecord(); }
   if (millis() - lastDisp >= 150) { lastDisp = millis(); updateDisplay(); }
   if (telemetry && millis() - lastTele >= 50) { lastTele = millis(); printTelemetry(); }
   delay(2);
