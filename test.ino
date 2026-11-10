@@ -12,8 +12,8 @@
  *      turn toward the darker one in proportion; S4 black = sharp right. Black/white thresholds (halfway
  *      between each sensor's calibrated levels) decide whether the line is seen at all.
  *   5. Line lost  -> pivots toward where the line was last seen; stops after LOST_TIMEOUT_MS.
- *      All black  -> crossing: drives straight through and for CROSS_MS after it, ignoring the sensors;
- *                    stops only if all black lasts longer than ALL_BLACK_STOP_MS (car picked up).
+ *      All black  -> (crossing line or the car was picked up) drives straight; stops
+ *                    if it lasts longer than ALL_BLACK_STOP_MS.
  *
  * ---------------- Arduino IDE settings (IMPORTANT) ----------------
  *   Board: "ESP32C6 Dev Module" (or your C6 board)
@@ -132,14 +132,9 @@ const uint32_t RAMP_MS        = 400;        // soft start from 0 to base speed
  
 // --- Lost line / safety ---
 const int      SEARCH_SPEED       = 130;
-const float    SEARCH_CENTER_BAND = 550.0f; // last seen near center -> creep straight instead of pivoting
-                                            // (linePos = 1000 * (d3 - d2); the line sits unevenly on S2/S3)
+const float    SEARCH_CENTER_BAND = 400.0f; // last seen near center -> creep straight instead of pivoting
 const uint32_t LOST_TIMEOUT_MS    = 1500;
-const uint32_t ALL_BLACK_STOP_MS  = 1500;   // all black this long = lifted / off the track: stop
-// Crossings: S2, S3 and S4 black together = the line crosses another line. The car notes the line as centred
-// and keeps straight for CROSS_MS after leaving it without looking at the sensors, which also carries it over
-// the tape gap at the panel seam just after the track's crossing (it used to pivot there and stop: "Line lost").
-const uint32_t CROSS_MS           = 350;
+const uint32_t ALL_BLACK_STOP_MS  = 300;
  
 // ================================ STATE ================================
 enum State : uint8_t { ST_COUNTDOWN, ST_IDLE, ST_CALIBRATING, ST_RUNNING, ST_SEARCHING,
@@ -182,7 +177,6 @@ bool     calThenRun = true;
 int      calMin[NUM_SENSORS], calMax[NUM_SENSORS];
 int      lastSweepLo[NUM_SENSORS], lastSweepHi[NUM_SENSORS];   // last finished sweep, for printCal
 uint32_t runStart = 0, lostSince = 0, allBlackSince = 0, motorTestStart = 0;
-uint32_t crossUntil = 0;
 float    lastPos = 0, prevErr = 0, integ = 0, dFilt = 0;
  
 // ================================ MOTORS ================================
@@ -273,7 +267,6 @@ void startRun(uint32_t now) {
   prevErr = lineSeen ? linePos : 0;
   lastPos = prevErr;
   lostSince = 0; allBlackSince = 0;
-  crossUntil = now;
   postEvent(EV_GO);
 }
  
@@ -366,23 +359,14 @@ void tickCalibration(uint32_t now) {
 }
  
 void tickFollow(uint32_t now) {
-  // All black: a crossing (brief) or the car was lifted / hit a big black area (long).
+  // All black: crossing line (brief) or the car was lifted / hit a big black area (long).
   if (allBlack()) {
     if (allBlackSince == 0) allBlackSince = now;
     if (now - allBlackSince > ALL_BLACK_STOP_MS) { stopCar(SR_ALL_BLACK, now); return; }
-    crossUntil = now + CROSS_MS;   // keep straight for CROSS_MS after leaving the crossing
     tgtL = tgtR = baseSpeed;
-    lastPos = 0; lostSince = 0;
     return;
   }
   allBlackSince = 0;
-  // Just past a crossing: straight, whatever the sensors say (tape gap / seam).
-  if ((int32_t)(crossUntil - now) > 0) {
-    tgtL = tgtR = baseSpeed;
-    lastPos = 0; lostSince = 0;
-    if (state == ST_SEARCHING) state = ST_RUNNING;
-    return;
-  }
  
   if (lineSeen) {
     if (state == ST_SEARCHING) { state = ST_RUNNING; postEvent(EV_FOUND); }
