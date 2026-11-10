@@ -116,8 +116,9 @@ const float    CENTER_TOL      = 350.0f;    // |position| below this counts as c
 // --- Motors ---
 const uint32_t PWM_FREQ      = 20000;       // above hearing range
 const uint8_t  PWM_BITS      = 8;           // speed / duty range 0-255
-const int      MIN_DUTY      = 125;         // lowest duty used for any non-zero speed. 145 was only needed while the
+const int      MIN_DUTY      = 135;         // lowest duty used for any non-zero speed. 145 was only needed while the
                                             // omni wheel stuck at the tape edge; with the ball caster it overshot turns.
+                                            // 135 since the full chassis added weight (2026-11-10).
 const int      SLEW_PER_TICK = 20;          // max speed change per 5 ms (limits current spikes / brownouts)
 const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, then coast
 const int      MOTOR_TEST_SPEED = 160;
