@@ -60,8 +60,8 @@ const bool SENSOR_ENABLED[NUM_SENSORS] = {false, true, true, true};
  
 // If a wheel spins backwards on "motors", swap that motor's two numbers.
 // If "LEFT forward" moves the right wheel, swap the L_ and R_ pairs.
-const uint8_t L_IN1 = 18, L_IN2 = 19;   // swapped 2026-11-07: left wheel ran backwards
-const uint8_t R_IN1 = 12, R_IN2 = 3;
+const uint8_t L_IN1 = 19, L_IN2 = 18;   // 2026-11-10: reversed again, car drove backwards after the chassis went on
+const uint8_t R_IN1 = 3, R_IN2 = 12;    // 2026-11-10: reversed, car drove backwards after the chassis went on
  
 const uint8_t I2C_SDA = 6, I2C_SCL = 7;  // tried swapped automatically if the OLED isn't found
 const uint8_t AMP_VDD_PIN = 21;          // powers the amplifier from a GPIO (see notes)
