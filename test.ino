@@ -114,21 +114,20 @@ const float    CENTER_TOL      = 350.0f;    // |position| below this counts as c
 // --- Motors ---
 const uint32_t PWM_FREQ      = 20000;       // above hearing range
 const uint8_t  PWM_BITS      = 8;           // speed / duty range 0-255
-const int      MIN_DUTY      = 145;         // lowest duty used for any non-zero speed. On the battery 168 was too
-                                            // strong and 70 stalled; 120 worked on bare floor but the omni wheel
-                                            // got stuck at the tape edge.
+const int      MIN_DUTY      = 125;         // lowest duty used for any non-zero speed. 145 was only needed while the
+                                            // omni wheel stuck at the tape edge; with the ball caster it overshot turns.
 const int      SLEW_PER_TICK = 20;          // max speed change per 5 ms (limits current spikes / brownouts)
 const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, then coast
 const int      MOTOR_TEST_SPEED = 160;
  
 // --- Line following (live-tunable over serial) ---
-volatile int   baseSpeed = 140;             // straight-line speed, 0-255
+volatile int   baseSpeed = 120;             // straight-line speed, 0-255
 volatile float kp = 0.10f;                  // speed units per position unit
 volatile float ki = 0.0f;
 volatile float kd = 0.004f;                 // speed units per (position unit / second)
 const float    D_FILTER       = 0.3f;       // derivative low-pass (0-1, lower = smoother)
 const float    I_LIMIT        = 2000.0f;
-const float    CURVE_SLOWDOWN = 0.35f;      // base speed drops up to 35 % at full error
+const float    CURVE_SLOWDOWN = 0.40f;      // base speed drops up to 40 % at full steering error
 const uint32_t RAMP_MS        = 400;        // soft start from 0 to base speed
  
 // --- Lost line / safety ---
@@ -384,9 +383,10 @@ void tickFollow(uint32_t now) {
     if (farLeft)       { l = hard; r = base; }        // line far left: sharp left
     else if (farRight) { l = base; r = hard; }        // line far right: sharp right
     else if (fabsf(err) < STEER_DEADBAND) { l = base; r = base; }   // centred: straight
-    else {                                            // turn toward the darker middle sensor
-      int corr = (int)(STEER_GAIN * err * base);
-      l = base + corr; r = base - corr;
+    else {                                            // turn toward the darker middle sensor, slowing down
+      int corr = (int)(STEER_GAIN * err * base);      // turn strength from the full base speed
+      int slow = (int)(base * (1.0f - CURVE_SLOWDOWN * min(1.0f, fabsf(err))));
+      l = slow + corr; r = slow - corr;
     }
     if (STEER_MIRROR) { int t = l; l = r; r = t; }
     tgtL = l; tgtR = r;
