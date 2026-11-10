@@ -136,7 +136,7 @@ const uint32_t RAMP_MS        = 400;        // soft start from 0 to base speed
 const int      SEARCH_SPEED       = 130;
 const float    SEARCH_CENTER_BAND = 400.0f; // last seen near center -> creep straight instead of pivoting
 const uint32_t LOST_TIMEOUT_MS    = 1500;
-const uint32_t ALL_BLACK_STOP_MS  = 300;
+const uint32_t ALL_BLACK_STOP_MS  = 1500;   // 300 stopped the car just past the track's crossing (black box, 2026-11-10)
  
 // ================================ STATE ================================
 enum State : uint8_t { ST_COUNTDOWN, ST_IDLE, ST_CALIBRATING, ST_RUNNING, ST_SEARCHING,
@@ -247,7 +247,8 @@ void computeLine() {
  
 bool allBlack() {
   if (!calValid) return false;
-  for (int i = 0; i < NUM_SENSORS; i++) if (sensorOk[i] && !isBlack[i]) return false;
+  // Solidly black on every used sensor, not just past the threshold: grey masking tape / seams don't count.
+  for (int i = 0; i < NUM_SENSORS; i++) if (sensorOk[i] && darkness[i] < ALL_BLACK_DARK) return false;
   return true;
 }
  
