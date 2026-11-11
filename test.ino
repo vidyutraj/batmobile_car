@@ -32,6 +32,7 @@
  *     log     toggle 20 Hz telemetry: state, sensor mV, on-line pattern, position, L/R
  *     show    print settings + calibration
  *     beep    sound test: steady 2.7 kHz tone for 3 s
+ *     snd N   preview sound N (0 boot, 1 cal, 2 ping, 3 go, 4 cruise, 5 turnR, 6 turnL, 7 lost, 8 stop, 9 error)
  *     dump    print the black box: the last 2 s before the last two stops (saved in flash)
  *     kp X / ki X / kd X / base X     live-tune the controller
  *   BOOT button (GPIO9): stop when moving, otherwise "go".
@@ -474,31 +475,47 @@ void controlTask(void *) {
 }
  
 // ================================ SOUND ================================
-struct Note { uint16_t freq; uint16_t ms; };     // freq 0 = rest, ms 0 = end
-// The PAM8904 drives a piezo, which is loudest around 2-4 kHz.
-const Note SND_BOOT[]  = {{2093, 90}, {2637, 90}, {3136, 160}, {0, 0}};
-const Note SND_TICK[]  = {{2000, 60}, {0, 0}};
-const Note SND_CAL[]   = {{2637, 60}, {0, 40}, {2637, 60}, {0, 0}};
-const Note SND_GO[]    = {{2093, 80}, {3136, 80}, {4186, 200}, {0, 0}};
-const Note SND_LOST[]  = {{3136, 90}, {2093, 140}, {0, 0}};
-const Note SND_STOP[]  = {{2637, 120}, {1568, 250}, {0, 0}};
-const Note SND_ERROR[] = {{1200, 150}, {0, 80}, {1200, 150}, {0, 80}, {1200, 300}, {0, 0}};
- 
+// Original Batman-inspired motifs (minor key, heroic leaps), not copies of any existing theme.
+// freq 0 = rest; ms 0 = end; to != 0 = slide smoothly from freq to `to` over ms (sonar / cape whoosh).
+// The PAM8904 drives a piezo, which is loudest around 2-4 kHz, so everything sits in that range.
+struct Note { uint16_t freq; uint16_t ms; uint16_t to; };
+// Note names (Hz): G6 1568, A6 1760, Bb6 1865, C#7 2217, D7 2349, F7 2794, G7 3136, A7 3520, Bb7 3729, D8 4699
+const Note SND_BOOT[]  = {{2349, 110}, {0, 30}, {2349, 110}, {0, 30}, {2794, 110}, {0, 30},   // power-on: the car's
+                          {3136, 160}, {3729, 160}, {3520, 380}, {0, 0}};                     //   own theme motif
+const Note SND_CAL[]   = {{4200, 90, 2600}, {0, 0}};                                          // sonar sweep
+const Note SND_GO[]    = {{2349, 70}, {2794, 70}, {3520, 70}, {4699, 300}, {0, 0}};           // launch fanfare
+const Note SND_LOST[]  = {{2794, 110}, {0, 30}, {2217, 240}, {0, 0}};                         // ominous "uh-oh"
+const Note SND_STOP[]  = {{3136, 90}, {0, 30}, {3136, 90}, {3729, 90}, {4699, 320}, {0, 0}};  // mission complete
+const Note SND_ERROR[] = {{1865, 150}, {0, 60}, {1760, 150}, {0, 60}, {1568, 320}, {0, 0}};   // falling, dark
+
+// Played by soundTask (priority 2: above loop(), below the 200 Hz control task). Anything may call playSound();
+// it only posts a request, so the OLED's ~25 ms redraw in loop() can't stall notes or slides.
+volatile const Note *sndRequest = nullptr;
 const Note *sndCur = nullptr;
 int sndIdx = 0;
-uint32_t sndNoteStart = 0;
- 
-void playSound(const struct Note *s) {   // "struct" keeps Arduino's auto-prototype compiling
-  sndCur = s; sndIdx = 0; sndNoteStart = millis();
-  ledcWriteTone(AMP_SIG_PIN, s[0].freq);
-}
- 
-void updateSound() {
-  if (!sndCur || millis() - sndNoteStart < sndCur[sndIdx].ms) return;
-  sndIdx++;
-  if (sndCur[sndIdx].ms == 0) { ledcWriteTone(AMP_SIG_PIN, 0); sndCur = nullptr; return; }
+uint32_t sndNoteStart = 0, sndLastSlide = 0;
+
+void playSound(const struct Note *s) { sndRequest = s; }   // "struct" keeps Arduino's auto-prototype compiling
+
+void sndStartNote() {
+  sndNoteStart = sndLastSlide = millis();
   ledcWriteTone(AMP_SIG_PIN, sndCur[sndIdx].freq);
-  sndNoteStart = millis();
+}
+
+void soundStep() {
+  const Note *req = (const Note *)sndRequest;
+  if (req) { sndRequest = nullptr; sndCur = req; sndIdx = 0; sndStartNote(); }
+  if (!sndCur) return;
+  const Note &n = sndCur[sndIdx];
+  uint32_t t = millis() - sndNoteStart;
+  if (t >= n.ms) {
+    sndIdx++;
+    if (sndCur[sndIdx].ms == 0) { ledcWriteTone(AMP_SIG_PIN, 0); sndCur = nullptr; return; }
+    sndStartNote();
+  } else if (n.to && n.freq && millis() - sndLastSlide >= 4) {   // slide: retune every 4 ms
+    sndLastSlide = millis();
+    ledcWriteTone(AMP_SIG_PIN, n.freq + (int32_t)(n.to - n.freq) * (int32_t)t / n.ms);
+  }
 }
  
 // ================================ OLED ================================
@@ -677,10 +694,10 @@ void drawBatFlight() {
 // Sound only: reads the car's state and motor outputs, never changes them. Event sounds (GO, lost, stop,
 // error) always win; these only play when nothing else is sounding.
 #define AMBIENT_SOUNDS 1     // 0 = no calibration / driving sounds (countdown and event sounds stay)
-const Note SND_PING[]   = {{3136, 40}, {0, 110}, {2637, 25}, {0, 0}};   // calibration: radar ping + echo
-const Note SND_CRUISE[] = {{1568, 25}, {0, 0}};                         // straight: soft low pulse
-const Note SND_TURN_R[] = {{2637, 45}, {3520, 60}, {0, 0}};             // turning right: rising chirp
-const Note SND_TURN_L[] = {{3520, 45}, {2637, 60}, {0, 0}};             // turning left: falling chirp
+const Note SND_PING[]   = {{3800, 45, 2800}, {0, 110}, {3200, 30, 2500}, {0, 0}};   // calibration: sonar chirp + echo
+const Note SND_CRUISE[] = {{1568, 20}, {0, 30}, {1760, 20}, {0, 0}};                // straight: engine rumble
+const Note SND_TURN_R[] = {{2400, 110, 3900}, {0, 0}};                              // turning right: whoosh up
+const Note SND_TURN_L[] = {{3900, 110, 2400}, {0, 0}};                              // turning left: whoosh down
 const uint32_t PING_EVERY_MS = 450, CRUISE_EVERY_MS = 700, TURN_EVERY_MS = 350;
 const float    TURN_SOUND_ON = 0.25f, TURN_SOUND_OFF = 0.15f;           // |turnAmount()| hysteresis
 
@@ -694,7 +711,7 @@ void updateAmbientSound() {
   else if (fabsf(t) < TURN_SOUND_OFF) turnDir = 0;
   bool turnStarted = turnDir != 0 && turnDir != prevTurnDir;
   prevTurnDir = turnDir;
-  if (sndCur) return;   // an event sound is playing
+  if (sndCur || sndRequest) return;   // an event sound is playing
   uint32_t now = millis();
   if (state == ST_CALIBRATING) {
     if (now - last >= PING_EVERY_MS) { last = now; playSound(SND_PING); }
@@ -706,6 +723,14 @@ void updateAmbientSound() {
     }
   }
 #endif
+}
+
+void soundTask(void *) {
+  for (;;) {
+    soundStep();
+    updateAmbientSound();
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
 }
 
 void updateDisplay() {
@@ -786,7 +811,7 @@ void printCal() {
 }
  
 void printHelp() {
-  Serial.println("Commands: debug go run stop cal motors log show dump beep | kp X ki X kd X base X");
+  Serial.println("Commands: debug go run stop cal motors log show dump beep snd N | kp X ki X kd X base X");
 }
  
 void handleLine(char *s) {
@@ -799,6 +824,16 @@ void handleLine(char *s) {
   else if (!strcmp(s, "motors")) { Serial.println("Motor test - wheels off the ground!"); sendCmd(CMD_MOTOR_TEST); }
   else if (!strcmp(s, "log"))    { telemetry = !telemetry; if (telemetry) Serial.println("ms state S1 S2 S3 S4 [pattern] pos L R"); }
   else if (!strcmp(s, "dump"))   bboxDump();
+  else if (!strncmp(s, "snd", 3)) {   // preview: snd 0..9
+    static const Note *const ALL[] = {SND_BOOT, SND_CAL, SND_PING, SND_GO, SND_CRUISE, SND_TURN_R, SND_TURN_L,
+                                      SND_LOST, SND_STOP, SND_ERROR};
+    static const char *const NAMES[] = {"boot theme", "calibration sweep", "sonar ping", "GO fanfare", "cruise",
+                                        "turn right whoosh", "turn left whoosh", "line lost", "mission complete",
+                                        "error"};
+    int n = atoi(s + 3);
+    if (n >= 0 && n < 10) { Serial.printf("snd %d: %s\n", n, NAMES[n]); playSound(ALL[n]); }
+    else Serial.println("snd 0-9: boot cal ping go cruise turnR turnL lost stop error");
+  }
   else if (!strcmp(s, "beep"))   {   // sound test: steady 2.7 kHz for 3 s
     static const Note SND_TEST[] = {{2700, 3000}, {0, 0}};
     Serial.println("beep: 2700 Hz for 3 s on GPIO20");
@@ -927,9 +962,10 @@ void handleEvents() {
   uint8_t e;
   while (xQueueReceive(eventQueue, &e, 0) == pdTRUE) {
     switch (e) {
-      case EV_TICK: {    // countdown beep, rising in pitch: 4 -> 2350 Hz ... 1 -> 3400 Hz
-        static Note tick[] = {{2000, 60}, {0, 0}};
-        tick[0].freq = 2000 + 350 * constrain(5 - (int)countdownSec, 0, 4);
+      case EV_TICK: {    // countdown "bat-signal" pulse: two notes a fourth apart, rising each second
+        static Note tick[] = {{2000, 45}, {0, 25}, {2667, 80}, {0, 0}};
+        tick[0].freq = 2000 + 300 * constrain(5 - (int)countdownSec, 0, 4);
+        tick[2].freq = tick[0].freq * 4 / 3;
         Serial.printf("Starting in %d...\n", (int)countdownSec);
         playSound(tick);
         break;
@@ -1047,14 +1083,13 @@ void setup() {
  
   // Priority 5 > loop() (priority 1): steering always wins over display/serial work.
   xTaskCreate(controlTask, "control", 4096, nullptr, 5, nullptr);
+  xTaskCreate(soundTask, "sound", 3072, nullptr, 2, nullptr);   // below control (5), above loop() (1)
 }
  
 void loop() {
   handleSerial();
   checkBootButton();
   handleEvents();
-  updateSound();
-  updateAmbientSound();
   updateLed();
  
   static uint32_t lastDisp = 0, lastTele = 0, lastBbox = 0;
