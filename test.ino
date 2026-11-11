@@ -660,6 +660,41 @@ void drawBatFlight() {
   drawBat(cx, cy, 1.1f, bankAngle);
 }
 
+// ================================ AUDIO CUES ================================
+// Sound only: reads the car's state and motor outputs, never changes them. Event sounds (GO, lost, stop,
+// error) always win; these only play when nothing else is sounding.
+#define AMBIENT_SOUNDS 1     // 0 = no calibration / driving sounds (countdown and event sounds stay)
+const Note SND_PING[]   = {{3136, 40}, {0, 110}, {2637, 25}, {0, 0}};   // calibration: radar ping + echo
+const Note SND_CRUISE[] = {{1568, 25}, {0, 0}};                         // straight: soft low pulse
+const Note SND_TURN_R[] = {{2637, 45}, {3520, 60}, {0, 0}};             // turning right: rising chirp
+const Note SND_TURN_L[] = {{3520, 45}, {2637, 60}, {0, 0}};             // turning left: falling chirp
+const uint32_t PING_EVERY_MS = 450, CRUISE_EVERY_MS = 700, TURN_EVERY_MS = 350;
+const float    TURN_SOUND_ON = 0.25f, TURN_SOUND_OFF = 0.15f;           // |turnAmount()| hysteresis
+
+void updateAmbientSound() {
+#if AMBIENT_SOUNDS
+  static uint32_t last = 0;
+  static int turnDir = 0, prevTurnDir = 0;
+  float t = turnAmount();
+  if (t > TURN_SOUND_ON) turnDir = 1;
+  else if (t < -TURN_SOUND_ON) turnDir = -1;
+  else if (fabsf(t) < TURN_SOUND_OFF) turnDir = 0;
+  bool turnStarted = turnDir != 0 && turnDir != prevTurnDir;
+  prevTurnDir = turnDir;
+  if (sndCur) return;   // an event sound is playing
+  uint32_t now = millis();
+  if (state == ST_CALIBRATING) {
+    if (now - last >= PING_EVERY_MS) { last = now; playSound(SND_PING); }
+  } else if (state == ST_RUNNING) {
+    if (turnDir != 0) {
+      if (turnStarted || now - last >= TURN_EVERY_MS) { last = now; playSound(turnDir > 0 ? SND_TURN_R : SND_TURN_L); }
+    } else if (now - last >= CRUISE_EVERY_MS) {
+      last = now; playSound(SND_CRUISE);
+    }
+  }
+#endif
+}
+
 void updateDisplay() {
   if (!oledOk) return;
   char buf[32];
@@ -874,7 +909,13 @@ void handleEvents() {
   uint8_t e;
   while (xQueueReceive(eventQueue, &e, 0) == pdTRUE) {
     switch (e) {
-      case EV_TICK:      Serial.printf("Starting in %d...\n", (int)countdownSec); playSound(SND_TICK); break;
+      case EV_TICK: {    // countdown beep, rising in pitch: 4 -> 2350 Hz ... 1 -> 3400 Hz
+        static Note tick[] = {{2000, 60}, {0, 0}};
+        tick[0].freq = 2000 + 350 * constrain(5 - (int)countdownSec, 0, 4);
+        Serial.printf("Starting in %d...\n", (int)countdownSec);
+        playSound(tick);
+        break;
+      }
       case EV_CAL_START: Serial.println("Calibrating (sweeping across the line)..."); playSound(SND_CAL); break;
       case EV_CAL_RETRY: Serial.println("Calibration spread too small - retrying with a wider sweep:"); printCal(); break;
       case EV_CAL_OK:    Serial.println("Calibration OK:"); printCal(); break;
@@ -993,6 +1034,7 @@ void loop() {
   checkBootButton();
   handleEvents();
   updateSound();
+  updateAmbientSound();
   updateLed();
  
   static uint32_t lastDisp = 0, lastTele = 0, lastBbox = 0;
