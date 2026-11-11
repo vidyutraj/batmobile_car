@@ -545,41 +545,134 @@ void drawSensors() {
   }
 }
  
+// ================================ BAT VISUALS ================================
+// Display only - nothing here affects driving. Countdown = bat-signal, calibration = radar, running = a bat
+// emblem that banks into turns (from the L/R motor outputs) with speed streaks that move faster with speed.
+// The emblem is an original bat silhouette built from filled triangles, so it can be drawn at any angle.
+#define OLED_BANK_INVERT 0   // 1 if the emblem / radar lean the opposite way to the car's turns
+
+struct Tri { int8_t ax, ay, bx, by, cx, cy; };
+// Right half of the emblem (x right, y down, centre at 0,0); the left half is mirrored.
+const Tri BAT_RIGHT[] = {
+  {4, -6, 14, -9, 10, 3},  {14, -9, 26, -10, 20, 1}, {26, -10, 40, -7, 30, -1},   // upper wing
+  {14, -9, 20, 1, 10, 3},  {26, -10, 30, -1, 20, 1},                             // wing fill
+  {40, -7, 34, 2, 30, -1}, {30, -1, 25, 5, 20, 1},   {20, 1, 14, 8, 10, 3},      // scalloped lower edge
+  {10, 3, 5, 9, 4, -6},                                                           // wing root
+  {0, -6, 4, -6, 5, 9},    {0, -6, 5, 9, 0, 12},                                  // body
+  {0, -6, 4, -6, 4, -12},                                                         // ear
+};
+
+void drawBat(float cx, float cy, float scale, float angle) {
+  float c = cosf(angle) * scale, s = sinf(angle) * scale;
+  for (int side = -1; side <= 1; side += 2) {
+    for (const Tri &t : BAT_RIGHT) {
+      const int8_t v[3][2] = {{t.ax, t.ay}, {t.bx, t.by}, {t.cx, t.cy}};
+      int px[3], py[3];
+      for (int k = 0; k < 3; k++) {
+        float x = v[k][0] * side, y = v[k][1];
+        px[k] = lroundf(cx + x * c - y * s);
+        py[k] = lroundf(cy + x * s + y * c);
+      }
+      oled.drawTriangle(px[0], py[0], px[1], py[1], px[2], py[2]);
+    }
+  }
+}
+
+// + = the car is turning right (left wheel faster than right).
+float turnAmount() {
+  float d = (outL - outR) / 255.0f;
+  return OLED_BANK_INVERT ? -d : d;
+}
+
+// Countdown: spotlight beam from the bottom-left up to a lit disc with the emblem; the beam flashes each second.
+void drawBatSignal() {
+  static int lastSec = -1;
+  static uint32_t flashUntil = 0;
+  if (countdownSec != lastSec) { lastSec = countdownSec; flashUntil = millis() + 250; }
+  const int sx = 86, sy = 24, rad = 21;
+  if (millis() < flashUntil) {
+    oled.drawTriangle(14, 63, 44, 63, sx - rad + 3, sy + 6);
+    oled.drawTriangle(44, 63, sx + 2, sy + rad - 2, sx - rad + 3, sy + 6);
+  } else {
+    oled.drawLine(14, 63, sx - rad + 3, sy + 6);
+    oled.drawLine(44, 63, sx + 2, sy + rad - 2);
+  }
+  oled.drawDisc(sx, sy, rad);
+  oled.setDrawColor(0);
+  drawBat(sx, sy + 1, 0.45f, 0);
+  oled.setDrawColor(1);
+  char buf[24];
+  oled.setFont(u8g2_font_logisoso24_tn);
+  snprintf(buf, sizeof buf, "%d", (int)countdownSec);
+  oled.drawStr(6, 34, buf);
+  if (badReset) {
+    oled.setFont(u8g2_font_5x7_tr);
+    snprintf(buf, sizeof buf, "RESET:%s", resetText);
+    oled.drawStr(0, 7, buf);
+  }
+}
+
+// Calibration: radar whose sweep line follows the car's pivot (heading integrated from the L/R outputs).
+float radarHeading = 0;
+uint32_t radarLast = 0;
+void drawRadar() {
+  uint32_t now = millis();
+  float dt = radarLast ? (now - radarLast) / 1000.0f : 0;
+  radarLast = now;
+  radarHeading = constrain(radarHeading + 1.6f * turnAmount() * dt, -1.2f, 1.2f);
+  const int cx = 64, cy = 62;
+  const uint8_t top = U8G2_DRAW_UPPER_LEFT | U8G2_DRAW_UPPER_RIGHT;
+  oled.drawCircle(cx, cy, 46, top);
+  oled.drawCircle(cx, cy, 31, top);
+  oled.drawCircle(cx, cy, 16, top);
+  oled.drawHLine(cx - 46, cy, 93);
+  for (float a : {radarHeading - 0.06f, radarHeading, radarHeading + 0.06f})
+    oled.drawLine(cx, cy, cx + lroundf(46 * sinf(a)), cy - lroundf(46 * cosf(a)));
+  oled.drawDisc(cx + lroundf(38 * sinf(radarHeading)), cy - lroundf(38 * cosf(radarHeading)), 2);
+  oled.setFont(u8g2_font_6x10_tr);
+  oled.drawStr(0, 9, calValid && calPhase == 2 ? "LOCKED ON" : "SCANNING");
+}
+
+// Running: banking emblem + radial speed streaks + a horizon that tilts against the bank.
+float bankAngle = 0;
+void drawBatFlight() {
+  bankAngle += 0.35f * (constrain(turnAmount(), -1.0f, 1.0f) * 0.45f - bankAngle);   // up to ~25 degrees, smoothed
+  float speed = (abs(outL) + abs(outR)) / 510.0f;
+  const int cx = 64, cy = 29;
+  // horizon, tilted the opposite way to the bank
+  float t = tanf(-bankAngle * 0.5f);
+  oled.drawLine(0, lroundf(56 - 64 * t), 127, lroundf(56 + 63 * t));
+  // speed streaks radiating from behind the emblem
+  static float phase = 0;
+  phase += 0.06f + 0.30f * speed;
+  if (phase >= 1) phase -= 1;
+  for (int i = 0; i < 10; i++) {
+    float a = i * 0.628f + 0.3f;
+    float r0 = 30 + 34 * fmodf(phase + i * 0.37f, 1.0f);
+    float dx = cosf(a), dy = sinf(a) * 0.55f;
+    oled.drawLine(cx + lroundf(r0 * dx), cy + lroundf(r0 * dy),
+                  cx + lroundf((r0 + 7) * dx), cy + lroundf((r0 + 7) * dy));
+  }
+  // keep the emblem readable over the streaks: clear a little around it, then draw it
+  oled.setDrawColor(0);
+  drawBat(cx, cy, 1.25f, bankAngle);
+  oled.setDrawColor(1);
+  drawBat(cx, cy, 1.1f, bankAngle);
+}
+
 void updateDisplay() {
   if (!oledOk) return;
   char buf[32];
+  static int prevState = -1;
+  if (state != prevState && state == ST_CALIBRATING) { radarHeading = 0; radarLast = 0; }
+  prevState = state;
   oled.clearBuffer();
   oled.setFont(u8g2_font_helvB10_tr);
  
   switch (state) {
-    case ST_COUNTDOWN:
-      drawCentered("BATMOBILE", 12);
-      oled.setFont(u8g2_font_6x10_tr);
-      if (badReset) { snprintf(buf, sizeof buf, "RESET: %s", resetText); drawCentered(buf, 24); }
-      else drawCentered("Place on line", 24);
-      oled.setFont(u8g2_font_logisoso16_tn);
-      snprintf(buf, sizeof buf, "%d", (int)countdownSec);
-      drawCentered(buf, 44);
-      break;
-    case ST_CALIBRATING:
-      drawCentered(calValid && calPhase == 2 ? "Cal OK" : "Calibrating", 12);
-      oled.setFont(u8g2_font_6x10_tr);
-      drawCentered(calValid && calPhase == 2 ? "Centering on line" : "Sweeping...", 26);
-      drawSensors();
-      break;
-    case ST_RUNNING: {
-      const char *where;
-      if (allBlack())                          where = "All black!";
-      else if (fabsf(linePos) < CENTER_TOL)    where = "Centered";
-      else if (linePos < 0)                    where = "Line LEFT  <-";
-      else                                     where = "Line RIGHT ->";
-      drawCentered(allBlack() ? "ALL BLACK" : "ON LINE", 12);
-      oled.setFont(u8g2_font_6x10_tr);
-      snprintf(buf, sizeof buf, "%s L%d R%d", where, (int)outL, (int)outR);
-      drawCentered(buf, 26);
-      drawSensors();
-      break;
-    }
+    case ST_COUNTDOWN:   drawBatSignal(); break;
+    case ST_CALIBRATING: drawRadar(); break;
+    case ST_RUNNING:     drawBatFlight(); break;
     case ST_SEARCHING:
       drawCentered("LINE LOST", 12);
       oled.setFont(u8g2_font_6x10_tr);
@@ -904,7 +997,7 @@ void loop() {
  
   static uint32_t lastDisp = 0, lastTele = 0, lastBbox = 0;
   if (millis() - lastBbox >= BBOX_PERIOD_MS) { lastBbox = millis(); bboxRecord(); }
-  if (millis() - lastDisp >= 150) { lastDisp = millis(); updateDisplay(); }
+  if (millis() - lastDisp >= 70) { lastDisp = millis(); updateDisplay(); }   // ~14 fps for the animations
   if (telemetry && millis() - lastTele >= 50) { lastTele = millis(); printTelemetry(); }
   delay(2);
 }
