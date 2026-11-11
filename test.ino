@@ -495,7 +495,9 @@ const Note *sndCur = nullptr;
 int sndIdx = 0;
 uint32_t sndNoteStart = 0, sndLastSlide = 0;
 
-void playSound(const struct Note *s) { sndRequest = s; }   // "struct" keeps Arduino's auto-prototype compiling
+void playSound(const struct Note *s) { sndRequest = s; }
+volatile uint16_t toneShowHz = 0;   // last 'tone' test frequency, shown on the idle OLED screen
+volatile uint32_t toneShowUntil = 0;   // "struct" keeps Arduino's auto-prototype compiling
 
 void sndStartNote() {
   sndNoteStart = sndLastSlide = millis();
@@ -755,6 +757,15 @@ void updateDisplay() {
       break;
     case ST_MOTOR_TEST:  drawCentered("Motor test", 12); break;
     case ST_IDLE:
+      if ((int32_t)(toneShowUntil - millis()) > 0) {   // 'tone' test: show the frequency big
+        drawCentered("TONE TEST", 12);
+        oled.setFont(u8g2_font_logisoso24_tn);
+        snprintf(buf, sizeof buf, "%u", (unsigned)toneShowHz);
+        drawCentered(buf, 50);
+        oled.setFont(u8g2_font_6x10_tr);
+        drawCentered("Hz", 62);
+        break;
+      }
       drawCentered("Debug mode", 12);
       oled.setFont(u8g2_font_6x10_tr);
       drawCentered("UART 115200: help", 26);
@@ -811,7 +822,7 @@ void printCal() {
 }
  
 void printHelp() {
-  Serial.println("Commands: debug go run stop cal motors log show dump beep snd N | kp X ki X kd X base X");
+  Serial.println("Commands: debug go run stop cal motors log show dump beep snd N tone HZ | kp X ki X kd X base X");
 }
  
 void handleLine(char *s) {
@@ -833,6 +844,16 @@ void handleLine(char *s) {
     int n = atoi(s + 3);
     if (n >= 0 && n < 10) { Serial.printf("snd %d: %s\n", n, NAMES[n]); playSound(ALL[n]); }
     else Serial.println("snd 0-9: boot cal ping go cruise turnR turnL lost stop error");
+  }
+  else if (!strncmp(s, "tone", 4)) {   // tone <hz> [ms]: one test tone, frequency shown on the OLED
+    static Note t[] = {{2700, 700}, {0, 0}};
+    unsigned hz = 0, ms = 700;
+    sscanf(s + 4, "%u %u", &hz, &ms);
+    if (hz < 200 || hz > 10000) { Serial.println("tone <200-10000 Hz> [ms]"); return; }
+    t[0].freq = hz; t[0].ms = constrain(ms, 50, 5000);
+    toneShowHz = hz; toneShowUntil = millis() + t[0].ms + 400;
+    Serial.printf("tone %u Hz for %u ms\n", hz, (unsigned)t[0].ms);
+    playSound(t);
   }
   else if (!strcmp(s, "beep"))   {   // sound test: steady 2.7 kHz for 3 s
     static const Note SND_TEST[] = {{2700, 3000}, {0, 0}};
