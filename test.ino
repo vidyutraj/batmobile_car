@@ -11,7 +11,8 @@
  *   4. Follows the line by comparing how dark the two middle sensors are: about equal = straight, otherwise
  *      turn toward the darker one in proportion; S4 black = sharp right. Black/white thresholds (halfway
  *      between each sensor's calibrated levels) decide whether the line is seen at all.
- *   5. Line lost  -> pivots toward where the line was last seen; stops after LOST_TIMEOUT_MS.
+ *   5. Line lost  -> last seen on the S4 side: pivots that way. Otherwise straight for GAP_STRAIGHT_MS
+ *                    (gaps), then pivots toward the blind S1 side. Stops after LOST_TIMEOUT_MS.
  *      All black  -> (crossing line or the car was picked up) drives straight; stops
  *                    if it lasts longer than ALL_BLACK_STOP_MS.
  *
@@ -137,6 +138,10 @@ const uint32_t RAMP_MS        = 400;        // soft start from 0 to base speed
 const int      SEARCH_SPEED       = 130;
 const float    SEARCH_CENTER_BAND = 400.0f; // last seen near center -> creep straight instead of pivoting
 const uint32_t LOST_TIMEOUT_MS    = 1500;
+// Line lost and not last seen on the S4 side: drive straight this long first (tape gaps, e.g. the seam after the
+// crossing), then pivot toward the S1 side. S1 is disabled, so a line leaving on that side (the sharp right
+// corner after the diagonal) just vanishes; a line leaving on the S4 side is caught by S4 first.
+const uint32_t GAP_STRAIGHT_MS    = 200;
 const uint32_t ALL_BLACK_STOP_MS  = 300;
  
 // ================================ STATE ================================
@@ -402,10 +407,14 @@ void tickFollow(uint32_t now) {
   // Line not seen
   if (state == ST_RUNNING) { state = ST_SEARCHING; lostSince = now; postEvent(EV_LOST); }
   if (now - lostSince > LOST_TIMEOUT_MS) { stopCar(SR_LOST, now); return; }
-  bool right = (lastPos > 0) != (bool)STEER_MIRROR;
-  if (fabsf(lastPos) < SEARCH_CENTER_BAND) { tgtL = tgtR = SEARCH_SPEED; }   // gap: keep going
-  else if (right) { tgtL = SEARCH_SPEED;  tgtR = -SEARCH_SPEED; }            // pivot right
-  else            { tgtL = -SEARCH_SPEED; tgtR = SEARCH_SPEED; }             // pivot left
+  const int towardS4 = STEER_MIRROR ? -1 : 1;     // sign of tgtL that pivots the car toward the S4 side
+  if (lastPos > SEARCH_CENTER_BAND) {             // last seen on the S4 side: pivot that way
+    tgtL = towardS4 * SEARCH_SPEED; tgtR = -towardS4 * SEARCH_SPEED;
+  } else if (now - lostSince < GAP_STRAIGHT_MS) { // maybe just a gap: keep going straight briefly
+    tgtL = tgtR = SEARCH_SPEED;
+  } else {                                        // then pivot toward the blind S1 side
+    tgtL = -towardS4 * SEARCH_SPEED; tgtR = towardS4 * SEARCH_SPEED;
+  }
 }
  
 void tickMotorTest(uint32_t now) {
