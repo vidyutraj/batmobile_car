@@ -480,13 +480,14 @@ void controlTask(void *) {
 // The PAM8904 drives a piezo, which is loudest around 2-4 kHz, so everything sits in that range.
 struct Note { uint16_t freq; uint16_t ms; uint16_t to; };
 // Note names (Hz): G6 1568, A6 1760, Bb6 1865, C#7 2217, D7 2349, F7 2794, G7 3136, A7 3520, Bb7 3729, D8 4699
-const Note SND_BOOT[]  = {{2349, 110}, {0, 30}, {2349, 110}, {0, 30}, {2794, 110}, {0, 30},   // power-on: the car's
-                          {3136, 160}, {3729, 160}, {3520, 380}, {0, 0}};                     //   own theme motif
-const Note SND_CAL[]   = {{4200, 90, 2600}, {0, 0}};                                          // sonar sweep
-const Note SND_GO[]    = {{2349, 70}, {2794, 70}, {3520, 70}, {4699, 300}, {0, 0}};           // launch fanfare
-const Note SND_LOST[]  = {{2794, 110}, {0, 30}, {2217, 240}, {0, 0}};                         // ominous "uh-oh"
-const Note SND_STOP[]  = {{3136, 90}, {0, 30}, {3136, 90}, {3729, 90}, {4699, 320}, {0, 0}};  // mission complete
-const Note SND_ERROR[] = {{1865, 150}, {0, 60}, {1760, 150}, {0, 60}, {1568, 320}, {0, 0}};   // falling, dark
+// Notes are long on purpose: a piezo sounds much louder on a sustained tone than on a short chirp.
+const Note SND_BOOT[]  = {{2349, 180}, {0, 40}, {2349, 180}, {0, 40}, {2794, 180}, {0, 40},   // power-on: the car's
+                          {3136, 250}, {3729, 250}, {3520, 650}, {0, 0}};                     //   own theme motif
+const Note SND_CAL[]   = {{4200, 300, 2600}, {0, 0}};                                         // sonar sweep
+const Note SND_GO[]    = {{2349, 120}, {2794, 120}, {3520, 120}, {4699, 550}, {0, 0}};        // launch fanfare
+const Note SND_LOST[]  = {{2794, 220}, {0, 40}, {2217, 450}, {0, 0}};                         // ominous "uh-oh"
+const Note SND_STOP[]  = {{3136, 150}, {0, 40}, {3136, 150}, {3729, 150}, {4699, 650}, {0, 0}};  // mission complete
+const Note SND_ERROR[] = {{1865, 220}, {0, 80}, {1760, 220}, {0, 80}, {1568, 450}, {0, 0}};   // falling, dark
 
 // Played by soundTask (priority 2: above loop(), below the 200 Hz control task). Anything may call playSound();
 // it only posts a request, so the OLED's ~25 ms redraw in loop() can't stall notes or slides.
@@ -696,11 +697,11 @@ void drawBatFlight() {
 // Sound only: reads the car's state and motor outputs, never changes them. Event sounds (GO, lost, stop,
 // error) always win; these only play when nothing else is sounding.
 #define AMBIENT_SOUNDS 1     // 0 = no calibration / driving sounds (countdown and event sounds stay)
-const Note SND_PING[]   = {{3800, 45, 2800}, {0, 110}, {3200, 30, 2500}, {0, 0}};   // calibration: sonar chirp + echo
-const Note SND_CRUISE[] = {{1568, 20}, {0, 30}, {1760, 20}, {0, 0}};                // straight: engine rumble
-const Note SND_TURN_R[] = {{2400, 110, 3900}, {0, 0}};                              // turning right: whoosh up
-const Note SND_TURN_L[] = {{3900, 110, 2400}, {0, 0}};                              // turning left: whoosh down
-const uint32_t PING_EVERY_MS = 450, CRUISE_EVERY_MS = 700, TURN_EVERY_MS = 350;
+const Note SND_PING[]   = {{3800, 200, 2800}, {0, 80}, {3200, 150, 2600}, {0, 0}};  // calibration: sonar sweep + echo
+const Note SND_CRUISE[] = {{2349, 160}, {0, 40}, {2794, 200}, {0, 0}};              // straight: engine pulse
+const Note SND_TURN_R[] = {{2400, 350, 3900}, {0, 0}};                              // turning right: whoosh up
+const Note SND_TURN_L[] = {{3900, 350, 2400}, {0, 0}};                              // turning left: whoosh down
+const uint32_t PING_EVERY_MS = 650, CRUISE_EVERY_MS = 1000, TURN_EVERY_MS = 550;
 const float    TURN_SOUND_ON = 0.25f, TURN_SOUND_OFF = 0.15f;           // |turnAmount()| hysteresis
 
 void updateAmbientSound() {
@@ -984,7 +985,7 @@ void handleEvents() {
   while (xQueueReceive(eventQueue, &e, 0) == pdTRUE) {
     switch (e) {
       case EV_TICK: {    // countdown "bat-signal" pulse: two notes a fourth apart, rising each second
-        static Note tick[] = {{2000, 45}, {0, 25}, {2667, 80}, {0, 0}};
+        static Note tick[] = {{2000, 150}, {0, 50}, {2667, 300}, {0, 0}};
         tick[0].freq = 2000 + 300 * constrain(5 - (int)countdownSec, 0, 4);
         tick[2].freq = tick[0].freq * 4 / 3;
         Serial.printf("Starting in %d...\n", (int)countdownSec);
