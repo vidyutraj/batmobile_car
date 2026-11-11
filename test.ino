@@ -31,6 +31,7 @@
  *     motors  test each wheel fwd/rev (lift the car!)
  *     log     toggle 20 Hz telemetry: state, sensor mV, on-line pattern, position, L/R
  *     show    print settings + calibration
+ *     beep    sound test: steady 2.7 kHz tone for 3 s
  *     dump    print the black box: the last 2 s before the last two stops (saved in flash)
  *     kp X / ki X / kd X / base X     live-tune the controller
  *   BOOT button (GPIO9): stop when moving, otherwise "go".
@@ -65,7 +66,10 @@ const uint8_t L_IN1 = 18, L_IN2 = 19;   // swapped 2026-11-07: left wheel ran ba
 const uint8_t R_IN1 = 12, R_IN2 = 3;
  
 const uint8_t I2C_SDA = 6, I2C_SCL = 7;  // tried swapped automatically if the OLED isn't found
-const uint8_t AMP_VDD_PIN = 21;          // powers the amplifier from a GPIO (see notes)
+const uint8_t AMP_VDD_PIN = 21;          // powers the amplifier from a GPIO - only if AMP_VDD_FROM_GPIO is 1
+// 0: leave GPIO21 alone. The PCB powers the PAM8904 itself; oled_cue (never touched GPIO21) made sound while
+// this sketch, driving GPIO21 high, was silent (2026-11-11).
+#define AMP_VDD_FROM_GPIO 0
 const uint8_t AMP_SIG_PIN = 20;          // square-wave tone into the amplifier
 const uint8_t BOOT_BTN_PIN = 9;          // DevKit BOOT button, active LOW
  
@@ -782,7 +786,7 @@ void printCal() {
 }
  
 void printHelp() {
-  Serial.println("Commands: debug go run stop cal motors log show dump | kp X ki X kd X base X");
+  Serial.println("Commands: debug go run stop cal motors log show dump beep | kp X ki X kd X base X");
 }
  
 void handleLine(char *s) {
@@ -795,6 +799,11 @@ void handleLine(char *s) {
   else if (!strcmp(s, "motors")) { Serial.println("Motor test - wheels off the ground!"); sendCmd(CMD_MOTOR_TEST); }
   else if (!strcmp(s, "log"))    { telemetry = !telemetry; if (telemetry) Serial.println("ms state S1 S2 S3 S4 [pattern] pos L R"); }
   else if (!strcmp(s, "dump"))   bboxDump();
+  else if (!strcmp(s, "beep"))   {   // sound test: steady 2.7 kHz for 3 s
+    static const Note SND_TEST[] = {{2700, 3000}, {0, 0}};
+    Serial.println("beep: 2700 Hz for 3 s on GPIO20");
+    playSound(SND_TEST);
+  }
   else if (!strcmp(s, "show"))   {
     Serial.printf("state=%s base=%d kp=%.4f ki=%.4f kd=%.5f\n", STATE_NAMES[state], (int)baseSpeed, kp, ki, kd);
     printCal();
@@ -1009,9 +1018,11 @@ void setup() {
     Serial.println("!!! BROWNOUT: the 3V3 rail dipped (likely motor current). See power notes.");
  
   // Amplifier: power it from GPIO21 at max drive strength, tone on GPIO20
+#if AMP_VDD_FROM_GPIO
   pinMode(AMP_VDD_PIN, OUTPUT);
   gpio_set_drive_capability((gpio_num_t)AMP_VDD_PIN, GPIO_DRIVE_CAP_3);
   digitalWrite(AMP_VDD_PIN, HIGH);
+#endif
   if (!ledcAttachChannel(AMP_SIG_PIN, 2000, 10, CH_TONE)) Serial.println("ERROR: tone PWM attach failed");
   ledcWrite(AMP_SIG_PIN, 0);
  
