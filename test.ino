@@ -55,10 +55,8 @@ const int NUM_SENSORS = 4;
 // OUT1..OUT4 of the sensor strip, ordered LEFT -> RIGHT as seen from behind the car
 // looking forward. If steering is mirrored, reverse this array.
 const uint8_t SENSOR_PINS[NUM_SENSORS] = {0, 1, 2, 5};
-// false = never used. S1 (GPIO0) sat at ~3130 mV (top of the ADC range) until the chassis went on; since then it
-// reads ~1450-1650 mV, so it is back on (2026-11-11) to catch sharp turns toward its side. Calibration still drops
-// any sensor with less than MIN_SPREAD_MV of contrast.
-const bool SENSOR_ENABLED[NUM_SENSORS] = {true, true, true, true};
+// false = never used. S1 (GPIO0) sits at ~3130 mV, the top of the ADC range, on white and black alike.
+const bool SENSOR_ENABLED[NUM_SENSORS] = {false, true, true, true};
  
 // If a wheel spins backwards on "motors", swap that motor's two numbers.
 // If "LEFT forward" moves the right wheel, swap the L_ and R_ pairs.
@@ -170,7 +168,7 @@ volatile int   motorTestStep = 0;
  
 int  blackMv[NUM_SENSORS], whiteMv[NUM_SENSORS], spreadMv[NUM_SENSORS];
 volatile bool calValid = false;
-bool sensorOk[NUM_SENSORS] = {true, true, true, true};   // false = excluded (no contrast during cal)
+bool sensorOk[NUM_SENSORS] = {false, true, true, true};   // false = excluded (no contrast during cal)
  
 // Control-task-only state
 uint32_t countdownEnd = 0;
