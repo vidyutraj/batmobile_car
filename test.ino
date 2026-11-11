@@ -124,7 +124,7 @@ const uint32_t BRAKE_MS      = 150;         // short-brake time when stopping, t
 const int      MOTOR_TEST_SPEED = 160;
  
 // --- Line following (live-tunable over serial) ---
-volatile int   baseSpeed = 100;             // straight-line speed, 0-255
+volatile int   baseSpeed = 85;              // straight-line speed, 0-255
 volatile float kp = 0.10f;                  // speed units per position unit
 volatile float ki = 0.0f;
 volatile float kd = 0.004f;                 // speed units per (position unit / second)
